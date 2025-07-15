@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,11 +10,13 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/crush/internal/env"
 	"github.com/charmbracelet/crush/internal/fur/client"
 	"github.com/charmbracelet/crush/internal/fur/provider"
 	"github.com/charmbracelet/crush/internal/log"
+	"github.com/charmbracelet/crush/internal/ollama"
 	"golang.org/x/exp/slog"
 )
 
@@ -85,6 +88,27 @@ func Load(workingDir string, debug bool) (*Config, error) {
 	}
 	cfg.SetupAgents()
 	return cfg, nil
+}
+
+// convertOllamaModels converts ollama.ProviderModel to provider.Model
+func convertOllamaModels(ollamaModels []ollama.ProviderModel) []provider.Model {
+	providerModels := make([]provider.Model, len(ollamaModels))
+	for i, model := range ollamaModels {
+		providerModels[i] = provider.Model{
+			ID:                 model.ID,
+			Model:              model.Model,
+			CostPer1MIn:        model.CostPer1MIn,
+			CostPer1MOut:       model.CostPer1MOut,
+			CostPer1MInCached:  model.CostPer1MInCached,
+			CostPer1MOutCached: model.CostPer1MOutCached,
+			ContextWindow:      model.ContextWindow,
+			DefaultMaxTokens:   model.DefaultMaxTokens,
+			CanReason:          model.CanReason,
+			HasReasoningEffort: model.HasReasoningEffort,
+			SupportsImages:     model.SupportsImages,
+		}
+	}
+	return providerModels
 }
 
 func (cfg *Config) configureProviders(env env.Env, resolver VariableResolver, knownProviders []provider.Provider) error {
@@ -182,6 +206,45 @@ func (cfg *Config) configureProviders(env env.Env, resolver VariableResolver, kn
 			}
 		}
 		cfg.Providers[string(p.ID)] = prepared
+	}
+
+	// Auto-detect Ollama if it's available and not already configured
+	if _, exists := cfg.Providers["ollama"]; !exists {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// First try to get provider if Ollama is already running
+		if ollamaProvider, err := ollama.GetProvider(ctx); err == nil {
+			slog.Debug("Auto-detected running Ollama provider", "models", len(ollamaProvider.Models))
+			cfg.Providers["ollama"] = ProviderConfig{
+				ID:      "ollama",
+				Name:    "Ollama",
+				BaseURL: "http://localhost:11434/v1",
+				Type:    provider.TypeOpenAI,
+				APIKey:  "ollama",
+				Models:  convertOllamaModels(ollamaProvider.Models),
+			}
+		} else {
+			// If Ollama is not running, try to start it
+			if err := ollama.EnsureRunning(ctx); err == nil {
+				// Now try to get the provider again
+				if ollamaProvider, err := ollama.GetProvider(ctx); err == nil {
+					slog.Debug("Started Ollama service and detected provider", "models", len(ollamaProvider.Models))
+					cfg.Providers["ollama"] = ProviderConfig{
+						ID:      "ollama",
+						Name:    "Ollama",
+						BaseURL: "http://localhost:11434/v1",
+						Type:    provider.TypeOpenAI,
+						APIKey:  "ollama",
+						Models:  convertOllamaModels(ollamaProvider.Models),
+					}
+				} else {
+					slog.Debug("Started Ollama service but failed to get provider", "error", err)
+				}
+			} else {
+				slog.Debug("Failed to start Ollama service", "error", err)
+			}
+		}
 	}
 
 	// validate the custom providers
