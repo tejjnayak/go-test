@@ -24,6 +24,7 @@ import (
 	"github.com/charmbracelet/crush/internal/tui/components/dialogs/permissions"
 	"github.com/charmbracelet/crush/internal/tui/components/dialogs/quit"
 	"github.com/charmbracelet/crush/internal/tui/components/dialogs/sessions"
+	"github.com/charmbracelet/crush/internal/tui/components/heartbit"
 	"github.com/charmbracelet/crush/internal/tui/page"
 	"github.com/charmbracelet/crush/internal/tui/page/chat"
 	"github.com/charmbracelet/crush/internal/tui/styles"
@@ -404,6 +405,7 @@ func (a *appModel) View() tea.View {
 	if withHelp, ok := page.(core.KeyMapHelp); ok {
 		a.status.SetKeyMap(withHelp.Help())
 	}
+
 	pageView := page.View()
 	components := []string{
 		pageView,
@@ -440,6 +442,20 @@ func (a *appModel) View() tea.View {
 			layers,
 			lipgloss.NewLayer(cmp).X(x).Y(y),
 		)
+	}
+
+	if a.wWidth >= 80 {
+		switch page := page.(type) {
+		case chat.ChatPage:
+			if page.Session().IsZero() {
+				// Render [heartbit] on the top right corner of the screen.
+				hb := heartbit.Standard()
+				x, y := max(hb.Width()-6, a.wWidth-hb.Width()-6), 6
+				layers = append(layers,
+					lipgloss.NewLayer(hb).X(x).Y(y).Z(1),
+				)
+			}
+		}
 	}
 
 	canvas := lipgloss.NewCanvas(
