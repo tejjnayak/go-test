@@ -37,6 +37,7 @@ type Editor interface {
 	SetSession(session session.Session) tea.Cmd
 	IsCompletionsOpen() bool
 	Cursor() *tea.Cursor
+	Send() tea.Cmd
 }
 
 type FileCompletionItem struct {
@@ -129,7 +130,7 @@ func (m *editorCmp) Init() tea.Cmd {
 	return nil
 }
 
-func (m *editorCmp) send() tea.Cmd {
+func (m *editorCmp) Send() tea.Cmd {
 	if m.app.CoderAgent == nil {
 		return util.ReportError(fmt.Errorf("coder agent is not initialized"))
 	}
@@ -266,7 +267,7 @@ func (m *editorCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.SetValue(value[:len(value)-1])
 			} else {
 				// Otherwise, send the message
-				return m, m.send()
+				return m, m.Send()
 			}
 		}
 	}
@@ -442,7 +443,9 @@ func (c *editorCmp) IsCompletionsOpen() bool {
 	return c.isCompletionsOpen
 }
 
-func New(app *app.App) Editor {
+
+
+func New(app *app.App, initialPrompt string) Editor {
 	t := styles.CurrentTheme()
 	ta := textarea.New()
 	ta.SetStyles(t.S().TextArea)
@@ -461,6 +464,12 @@ func New(app *app.App) Editor {
 	ta.Placeholder = "Tell me more about this project..."
 	ta.SetVirtualCursor(false)
 	ta.Focus()
+
+	// Set initial prompt if provided
+	if initialPrompt != "" {
+		ta.SetValue(initialPrompt)
+		ta.MoveToEnd()
+	}
 
 	return &editorCmp{
 		// TODO: remove the app instance from here
