@@ -509,6 +509,7 @@ func NewManager(defaultTheme string) *Manager {
 	}
 
 	m.Register(NewCrushTheme())
+	m.Register(NewCatppuccinLatteTheme())
 
 	m.current = m.themes[defaultTheme]
 
