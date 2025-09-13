@@ -520,27 +520,27 @@ func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msg
 	// Add the session and message ID into the context if needed by tools.
 	ctx = context.WithValue(ctx, tools.MessageIDContextKey, assistantMsg.ID)
 
-    // Process each event in the stream.
-    for event := range eventChan {
-        if processErr := a.processEvent(ctx, sessionID, &assistantMsg, event); processErr != nil {
-            if errors.Is(processErr, context.Canceled) {
-                a.finishMessage(context.Background(), &assistantMsg, message.FinishReasonCanceled, "Request cancelled", "")
-            } else {
-                a.finishMessage(ctx, &assistantMsg, message.FinishReasonError, "API Error", processErr.Error())
-            }
-            return assistantMsg, nil, processErr
-        }
+	// Process each event in the stream.
+	for event := range eventChan {
+		if processErr := a.processEvent(ctx, sessionID, &assistantMsg, event); processErr != nil {
+			if errors.Is(processErr, context.Canceled) {
+				a.finishMessage(context.Background(), &assistantMsg, message.FinishReasonCanceled, "Request cancelled", "")
+			} else {
+				a.finishMessage(ctx, &assistantMsg, message.FinishReasonError, "API Error", processErr.Error())
+			}
+			return assistantMsg, nil, processErr
+		}
 
-        // If the provider signalled completion, stop waiting for more events.
-        if event.Type == provider.EventComplete {
-            break
-        }
+		// If the provider signalled completion, stop waiting for more events.
+		if event.Type == provider.EventComplete {
+			break
+		}
 
-        if ctx.Err() != nil {
-            a.finishMessage(context.Background(), &assistantMsg, message.FinishReasonCanceled, "Request cancelled", "")
-            return assistantMsg, nil, ctx.Err()
-        }
-    }
+		if ctx.Err() != nil {
+			a.finishMessage(context.Background(), &assistantMsg, message.FinishReasonCanceled, "Request cancelled", "")
+			return assistantMsg, nil, ctx.Err()
+		}
+	}
 
 	toolResults := make([]message.ToolResult, len(assistantMsg.ToolCalls()))
 	toolCalls := assistantMsg.ToolCalls()
@@ -709,6 +709,11 @@ func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg
 		assistantMsg.AddFinish(event.Response.FinishReason, "", "")
 		if err := a.messages.Update(ctx, *assistantMsg); err != nil {
 			return fmt.Errorf("failed to update message: %w", err)
+		}
+		return a.TrackUsage(ctx, sessionID, a.Model(), event.Response.Usage)
+		// If sessions are not configured (e.g., in lightweight tests), skip tracking usage.
+		if a.sessions == nil {
+			return nil
 		}
 		return a.TrackUsage(ctx, sessionID, a.Model(), event.Response.Usage)
 	}
