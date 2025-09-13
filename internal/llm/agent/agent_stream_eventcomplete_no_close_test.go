@@ -23,13 +23,14 @@ func (f *fakeProvider) SendMessages(ctx context.Context, messages []message.Mess
 }
 
 func (f *fakeProvider) StreamResponse(ctx context.Context, messages []message.Message, tools []tools.BaseTool) <-chan provider.ProviderEvent {
-	ch := make(chan provider.ProviderEvent, 1)
-	go func() {
-		// Send a complete event and then block until context is done.
-		ch <- provider.ProviderEvent{Type: provider.EventComplete, Response: &provider.ProviderResponse{Content: "hello", FinishReason: message.FinishReasonEndTurn}}
-		<-ctx.Done()
-	}()
-	return ch
+    ch := make(chan provider.ProviderEvent, 2)
+    go func() {
+        // Send a content delta then a complete event, then block until context is done (to simulate a channel that isn't closed).
+        ch <- provider.ProviderEvent{Type: provider.EventContentDelta, Content: "hello"}
+        ch <- provider.ProviderEvent{Type: provider.EventComplete, Response: &provider.ProviderResponse{Content: "hello", FinishReason: message.FinishReasonEndTurn}}
+        <-ctx.Done()
+    }()
+    return ch
 }
 
 func (f *fakeProvider) Model() catwalk.Model { return catwalk.Model{} }
@@ -89,50 +90,46 @@ func (s *memSessionService) Save(ctx context.Context, sess session.Session) (ses
 func (s *memSessionService) Delete(ctx context.Context, id string) error { return nil }
 
 func Test_StreamAndHandleEvents_EventComplete_NoClose(t *testing.T) {
-	t.Parallel()
-	// Minimal config so a.Model() works during TrackUsage
-	work := t.TempDir()
-	data := t.TempDir()
-	cfg, err := config.Init(work, data, false)
-	if err != nil {
-		t.Fatalf("failed to init config: %v", err)
-	}
-	cfg.Providers = csync.NewMap[string, config.ProviderConfig]()
-	cfg.Providers.Set("test", config.ProviderConfig{
-		ID:     "test",
-		Models: []catwalk.Model{{ID: "m1"}},
-	})
-	cfg.Models = map[config.SelectedModelType]config.SelectedModel{
-		config.SelectedModelTypeLarge: {Provider: "test", Model: "m1"},
-	}
-	// Construct minimal agent with fake provider and in-memory services
-	a := &agent{
-		Broker:     pubsub.NewBroker[AgentEvent](),
-		messages:   &memMessageService{pub: pubsub.NewBroker[message.Message]()},
-		sessions:   &memSessionService{},
-		provider:   &fakeProvider{},
-		providerID: "fake",
-		agentCfg:   config.Agent{Model: config.SelectedModelTypeLarge},
-	}
+    t.Parallel()
+    // Minimal config so a.Model() works during TrackUsage
+    work := t.TempDir()
+    data := t.TempDir()
+    cfg, err := config.Init(work, data, false)
+    if err != nil {
+        t.Fatalf("failed to init config: %v", err)
+    }
+    cfg.Providers = csync.NewMap[string, config.ProviderConfig]()
+    cfg.Providers.Set("test", config.ProviderConfig{
+        ID:     "test",
+        Models: []catwalk.Model{{ID: "m1"}},
+    })
+    cfg.Models = map[config.SelectedModelType]config.SelectedModel{
+        config.SelectedModelTypeLarge: {Provider: "test", Model: "m1"},
+    }
+    // Construct minimal agent with fake provider and in-memory services
+    a := &agent{
+        Broker:     pubsub.NewBroker[AgentEvent](),
+        messages:   &memMessageService{pub: pubsub.NewBroker[message.Message]()},
+        sessions:   &memSessionService{},
+        provider:   &fakeProvider{},
+        providerID: "fake",
+        agentCfg:   config.Agent{Model: config.SelectedModelTypeLarge},
+    }
 
-	// Provide a lazy tools slice that returns no tools
-	a.tools = csync.NewLazySlice(func() []tools.BaseTool { return nil })
+    // Provide a lazy tools slice that returns no tools
+    a.tools = csync.NewLazySlice(func() []tools.BaseTool { return nil })
 
-	// Instead of invoking streamAndHandleEvents (which depends on global config),
-	// exercise processEvent directly to ensure EventComplete handling does not hang
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	assistant := message.Message{ID: "a1", SessionID: "sess1", Role: message.Assistant, Parts: []message.ContentPart{}}
-	ev := provider.ProviderEvent{Type: provider.EventComplete, Response: &provider.ProviderResponse{Content: "hello", FinishReason: message.FinishReasonEndTurn}}
-
-	if err := a.processEvent(ctx, "sess1", &assistant, ev); err != nil {
-		t.Fatalf("processEvent returned error: %v", err)
-	}
-	if assistant.Content().Text != "hello" {
-		t.Fatalf("expected content 'hello', got %q", assistant.Content().Text)
-	}
-	if assistant.FinishReason() == "" {
-		t.Fatalf("expected finish reason to be set")
-	}
+    // Call streamAndHandleEvents; fake provider won't close the channel after Complete.
+    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+    defer cancel()
+    assistant, _, err := a.streamAndHandleEvents(ctx, "sess1", []message.Message{{Role: message.User, Parts: []message.ContentPart{message.TextContent{Text: "hi"}}}})
+    if err != nil {
+        t.Fatalf("streamAndHandleEvents error: %v", err)
+    }
+    if assistant.Content().Text != "hello" {
+        t.Fatalf("expected content 'hello', got %q", assistant.Content().Text)
+    }
+    if assistant.FinishReason() == "" {
+        t.Fatalf("expected finish reason to be set")
+    }
 }

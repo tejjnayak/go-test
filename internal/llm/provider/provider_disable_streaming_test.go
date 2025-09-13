@@ -36,7 +36,7 @@ func (f *fakeClient) stream(ctx context.Context, messages []message.Message, too
 
 func (f *fakeClient) Model() catwalk.Model { return catwalk.Model{ID: "fake"} }
 
-// Test that when disableStreaming is true, StreamResponse emits a single EventComplete using send.
+// Test that when disableStreaming is true, StreamResponse emits a ContentDelta then Complete using send.
 func TestBaseProvider_StreamResponse_FallbackComplete(t *testing.T) {
 	t.Parallel()
 
@@ -52,23 +52,26 @@ func TestBaseProvider_StreamResponse_FallbackComplete(t *testing.T) {
 	msgs := []message.Message{{Role: message.User, Parts: []message.ContentPart{message.TextContent{Text: "hi"}}}}
 	ch := p.StreamResponse(ctx, msgs, nil)
 
-	var events []ProviderEvent
-	for ev := range ch {
-		events = append(events, ev)
-	}
+    var events []ProviderEvent
+    for ev := range ch {
+        events = append(events, ev)
+    }
 
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Type != EventComplete {
-		t.Fatalf("expected EventComplete, got %v", events[0].Type)
-	}
-	if events[0].Response == nil || events[0].Response.Content != "hello" {
-		t.Fatalf("unexpected response: %+v", events[0].Response)
-	}
-	if !fc.sendCalled || fc.streamCalled {
-		t.Fatalf("expected sendCalled=true and streamCalled=false, got send=%v stream=%v", fc.sendCalled, fc.streamCalled)
-	}
+    if len(events) != 2 {
+        t.Fatalf("expected 2 events, got %d", len(events))
+    }
+    if events[0].Type != EventContentDelta || events[0].Content != "hello" {
+        t.Fatalf("expected first ContentDelta 'hello', got %+v", events[0])
+    }
+    if events[1].Type != EventComplete {
+        t.Fatalf("expected second EventComplete, got %v", events[1].Type)
+    }
+    if events[1].Response == nil || events[1].Response.Content != "hello" {
+        t.Fatalf("unexpected response: %+v", events[1].Response)
+    }
+    if !fc.sendCalled || fc.streamCalled {
+        t.Fatalf("expected sendCalled=true and streamCalled=false, got send=%v stream=%v", fc.sendCalled, fc.streamCalled)
+    }
 }
 
 // Test that errors are surfaced as a single EventError when disableStreaming is true.

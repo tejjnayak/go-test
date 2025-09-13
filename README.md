@@ -324,8 +324,11 @@ Anthropic-compatible APIs.
 
 #### Disable Streaming
 
-To force non-streaming completions while keeping a single final event on the
-stream channel, set `disable_streaming` on the provider:
+To force non-streaming completions while preserving the streaming contract,
+set `disable_streaming` on the provider. In this mode the provider emits
+exactly one `content_delta` event with the full content (if any), followed by
+one `complete` event with finish reason, tool calls, and usage. This keeps the
+agent’s event handling identical across modes.
 
 ```json
 {
