@@ -62,19 +62,19 @@ type Provider interface {
 }
 
 type providerClientOptions struct {
-    baseURL            string
-    config             config.ProviderConfig
-    apiKey             string
-    modelType          config.SelectedModelType
-    model              func(config.SelectedModelType) catwalk.Model
-    disableCache       bool
-    disableStreaming   bool
-    systemMessage      string
-    systemPromptPrefix string
-    maxTokens          int64
-    extraHeaders       map[string]string
-    extraBody          map[string]any
-    extraParams        map[string]string
+	baseURL            string
+	config             config.ProviderConfig
+	apiKey             string
+	modelType          config.SelectedModelType
+	model              func(config.SelectedModelType) catwalk.Model
+	disableCache       bool
+	disableStreaming   bool
+	systemMessage      string
+	systemPromptPrefix string
+	maxTokens          int64
+	extraHeaders       map[string]string
+	extraBody          map[string]any
+	extraParams        map[string]string
 }
 
 type ProviderClientOption func(*providerClientOptions)
@@ -108,25 +108,25 @@ func (p *baseProvider[C]) SendMessages(ctx context.Context, messages []message.M
 }
 
 func (p *baseProvider[C]) StreamResponse(ctx context.Context, messages []message.Message, tools []tools.BaseTool) <-chan ProviderEvent {
-    messages = p.cleanMessages(messages)
+	messages = p.cleanMessages(messages)
 
-    if !p.options.disableStreaming {
-        return p.client.stream(ctx, messages, tools)
-    }
+	if !p.options.disableStreaming {
+		return p.client.stream(ctx, messages, tools)
+	}
 
-    // Fallback to non-streaming call while still exposing a stream-like API
-    eventChan := make(chan ProviderEvent, 1)
-    go func() {
-        defer close(eventChan)
-        resp, err := p.client.send(ctx, messages, tools)
-        if err != nil {
-            eventChan <- ProviderEvent{Type: EventError, Error: err}
-            return
-        }
-        eventChan <- ProviderEvent{Type: EventComplete, Response: resp}
-    }()
+	// Fallback to non-streaming call while still exposing a stream-like API
+	eventChan := make(chan ProviderEvent, 1)
+	go func() {
+		defer close(eventChan)
+		resp, err := p.client.send(ctx, messages, tools)
+		if err != nil {
+			eventChan <- ProviderEvent{Type: EventError, Error: err}
+			return
+		}
+		eventChan <- ProviderEvent{Type: EventComplete, Response: resp}
+	}()
 
-    return eventChan
+	return eventChan
 }
 
 func (p *baseProvider[C]) Model() catwalk.Model {
@@ -175,19 +175,19 @@ func NewProvider(cfg config.ProviderConfig, opts ...ProviderClientOption) (Provi
 		resolvedExtraHeaders[key] = resolvedValue
 	}
 
-    clientOptions := providerClientOptions{
-        baseURL:            cfg.BaseURL,
-        config:             cfg,
-        apiKey:             resolvedAPIKey,
-        extraHeaders:       resolvedExtraHeaders,
-        extraBody:          cfg.ExtraBody,
-        extraParams:        cfg.ExtraParams,
-        systemPromptPrefix: cfg.SystemPromptPrefix,
-        disableStreaming:   cfg.DisableStreaming,
-        model: func(tp config.SelectedModelType) catwalk.Model {
-            return *config.Get().GetModelByType(tp)
-        },
-    }
+	clientOptions := providerClientOptions{
+		baseURL:            cfg.BaseURL,
+		config:             cfg,
+		apiKey:             resolvedAPIKey,
+		extraHeaders:       resolvedExtraHeaders,
+		extraBody:          cfg.ExtraBody,
+		extraParams:        cfg.ExtraParams,
+		systemPromptPrefix: cfg.SystemPromptPrefix,
+		disableStreaming:   cfg.DisableStreaming,
+		model: func(tp config.SelectedModelType) catwalk.Model {
+			return *config.Get().GetModelByType(tp)
+		},
+	}
 	for _, o := range opts {
 		o(&clientOptions)
 	}
@@ -227,7 +227,7 @@ func NewProvider(cfg config.ProviderConfig, opts ...ProviderClientOption) (Provi
 }
 
 func WithDisableStreaming(disable bool) ProviderClientOption {
-    return func(options *providerClientOptions) {
-        options.disableStreaming = disable
-    }
+	return func(options *providerClientOptions) {
+		options.disableStreaming = disable
+	}
 }
