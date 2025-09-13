@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/catwalk/pkg/catwalk"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/llm/provider"
 	"github.com/charmbracelet/crush/internal/llm/tools"
@@ -89,13 +90,29 @@ func (s *memSessionService) Delete(ctx context.Context, id string) error { retur
 
 func Test_StreamAndHandleEvents_EventComplete_NoClose(t *testing.T) {
 	t.Parallel()
+	// Minimal config so a.Model() works during TrackUsage
+	work := t.TempDir()
+	data := t.TempDir()
+	cfg, err := config.Init(work, data, false)
+	if err != nil {
+		t.Fatalf("failed to init config: %v", err)
+	}
+	cfg.Providers = csync.NewMap[string, config.ProviderConfig]()
+	cfg.Providers.Set("test", config.ProviderConfig{
+		ID:     "test",
+		Models: []catwalk.Model{{ID: "m1"}},
+	})
+	cfg.Models = map[config.SelectedModelType]config.SelectedModel{
+		config.SelectedModelTypeLarge: {Provider: "test", Model: "m1"},
+	}
 	// Construct minimal agent with fake provider and in-memory services
 	a := &agent{
 		Broker:     pubsub.NewBroker[AgentEvent](),
 		messages:   &memMessageService{pub: pubsub.NewBroker[message.Message]()},
-		sessions:   nil,
+		sessions:   &memSessionService{},
 		provider:   &fakeProvider{},
 		providerID: "fake",
+		agentCfg:   config.Agent{Model: config.SelectedModelTypeLarge},
 	}
 
 	// Provide a lazy tools slice that returns no tools

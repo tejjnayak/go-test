@@ -710,10 +710,6 @@ func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg
 		if err := a.messages.Update(ctx, *assistantMsg); err != nil {
 			return fmt.Errorf("failed to update message: %w", err)
 		}
-		// If sessions are not configured (e.g., in lightweight tests), skip tracking usage.
-		if a.sessions == nil {
-			return nil
-		}
 		model := a.Model()
 		return a.TrackUsage(ctx, sessionID, model, event.Response.Usage)
 	}
