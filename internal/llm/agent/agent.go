@@ -705,8 +705,7 @@ func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg
 		if err := a.messages.Update(ctx, *assistantMsg); err != nil {
 			return fmt.Errorf("failed to update message: %w", err)
 		}
-		model := a.Model()
-		return a.TrackUsage(ctx, sessionID, model, event.Response.Usage)
+		return a.TrackUsage(ctx, sessionID, a.Model(), event.Response.Usage)
 	}
 
 	return nil
