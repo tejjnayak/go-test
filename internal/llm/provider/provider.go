@@ -108,29 +108,29 @@ func (p *baseProvider[C]) SendMessages(ctx context.Context, messages []message.M
 }
 
 func (p *baseProvider[C]) StreamResponse(ctx context.Context, messages []message.Message, tools []tools.BaseTool) <-chan ProviderEvent {
-    messages = p.cleanMessages(messages)
+	messages = p.cleanMessages(messages)
 
-    if !p.options.disableStreaming {
-        return p.client.stream(ctx, messages, tools)
-    }
+	if !p.options.disableStreaming {
+		return p.client.stream(ctx, messages, tools)
+	}
 
-    // Fallback to non-streaming call while still exposing a stream-like API
-    // Emit a single ContentDelta (when content exists) followed by Complete.
-    eventChan := make(chan ProviderEvent, 2)
-    go func() {
-        defer close(eventChan)
-        resp, err := p.client.send(ctx, messages, tools)
-        if err != nil {
-            eventChan <- ProviderEvent{Type: EventError, Error: err}
-            return
-        }
-        if resp != nil && resp.Content != "" {
-            eventChan <- ProviderEvent{Type: EventContentDelta, Content: resp.Content}
-        }
-        eventChan <- ProviderEvent{Type: EventComplete, Response: resp}
-    }()
+	// Fallback to non-streaming call while still exposing a stream-like API
+	// Emit a single ContentDelta (when content exists) followed by Complete.
+	eventChan := make(chan ProviderEvent, 2)
+	go func() {
+		defer close(eventChan)
+		resp, err := p.client.send(ctx, messages, tools)
+		if err != nil {
+			eventChan <- ProviderEvent{Type: EventError, Error: err}
+			return
+		}
+		if resp != nil && resp.Content != "" {
+			eventChan <- ProviderEvent{Type: EventContentDelta, Content: resp.Content}
+		}
+		eventChan <- ProviderEvent{Type: EventComplete, Response: resp}
+	}()
 
-    return eventChan
+	return eventChan
 }
 
 func (p *baseProvider[C]) Model() catwalk.Model {
