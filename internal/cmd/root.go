@@ -36,6 +36,7 @@ func init() {
 	rootCmd.Flags().BoolP("quiet", "q", false, "Hide spinner when using --prompt")
 
 	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(updateProvidersCmd)
 }
 
 var rootCmd = &cobra.Command{
