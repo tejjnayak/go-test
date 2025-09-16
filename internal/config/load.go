@@ -59,11 +59,22 @@ func Load(workingDir, dataDir string, debug bool) (*Config, error) {
 		cfg.Options.Debug = true
 	}
 
-	// Setup logs
-	log.Setup(
-		filepath.Join(cfg.Options.DataDirectory, "logs", fmt.Sprintf("%s.log", appName)),
-		cfg.Options.Debug,
-	)
+	// Setup logs. During `go test` we avoid creating file-backed logs
+	// because on Windows an open log file prevents removal of the test
+	// temporary directory. Use stdout-backed logging for tests instead.
+	logsFile := filepath.Join(cfg.Options.DataDirectory, "logs", fmt.Sprintf("%s.log", appName))
+	// Detect test binary by name (e.g. foo.test or foo.test.exe)
+	name := strings.ToLower(filepath.Base(os.Args[0]))
+	if strings.HasSuffix(name, ".test") || strings.HasSuffix(name, ".test.exe") {
+		level := slog.LevelInfo
+		if cfg.Options.Debug {
+			level = slog.LevelDebug
+		}
+		logger := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level, AddSource: true})
+		slog.SetDefault(slog.New(logger))
+	} else {
+		log.Setup(logsFile, cfg.Options.Debug)
+	}
 
 	// Load known providers, this loads the config from catwalk
 	providers, err := Providers()
