@@ -100,10 +100,9 @@ func (s *memSessionService) Delete(ctx context.Context, id string) error { retur
 func Test_StreamAndHandleEvents_EventComplete_NoClose(t *testing.T) {
 	t.Parallel()
 	// Minimal config so a.Model() works during TrackUsage
-    work := t.TempDir()
-    // Use project config init similar to other provider tests to avoid
-    // creating file-backed logs inside a test-managed temp dir on Windows.
-    cfg, err := config.Init(".", "", true)
+	// Use project config init similar to other provider tests to avoid
+	// creating file-backed logs inside a test-managed temp dir on Windows.
+	cfg, err := config.Init(".", "", true)
 	if err != nil {
 		t.Fatalf("failed to init config: %v", err)
 	}
