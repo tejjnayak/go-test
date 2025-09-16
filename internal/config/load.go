@@ -59,19 +59,11 @@ func Load(workingDir, dataDir string, debug bool) (*Config, error) {
 		cfg.Options.Debug = true
 	}
 
-	// Use stdout logger during `go test` to avoid Windows file locking.
-	logsFile := filepath.Join(cfg.Options.DataDirectory, "logs", fmt.Sprintf("%s.log", appName))
-	name := strings.ToLower(filepath.Base(os.Args[0]))
-	if strings.HasSuffix(name, ".test") || strings.HasSuffix(name, ".test.exe") {
-		level := slog.LevelInfo
-		if cfg.Options.Debug {
-			level = slog.LevelDebug
-		}
-		logger := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level, AddSource: true})
-		slog.SetDefault(slog.New(logger))
-	} else {
-		log.Setup(logsFile, cfg.Options.Debug)
-	}
+	// Setup logs
+	log.Setup(
+		filepath.Join(cfg.Options.DataDirectory, "logs", fmt.Sprintf("%s.log", appName)),
+		cfg.Options.Debug,
+	)
 
 	// Load known providers, this loads the config from catwalk
 	providers, err := Providers()
