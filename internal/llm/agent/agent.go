@@ -83,8 +83,7 @@ type agent struct {
 	summarizeProviderID string
 
 	activeRequests *csync.Map[string, context.CancelFunc]
-
-	promptQueue *csync.Map[string, []string]
+	promptQueue    *csync.Map[string, []string]
 }
 
 var agentPromptMap = map[string]prompt.PromptID{
@@ -100,7 +99,7 @@ func NewAgent(
 	sessions session.Service,
 	messages message.Service,
 	history history.Service,
-	lspClients map[string]*lsp.Client,
+	lspClients *csync.Map[string, *lsp.Client],
 ) (Service, error) {
 	cfg := config.Get()
 
@@ -184,7 +183,7 @@ func NewAgent(
 
 		cwd := cfg.WorkingDir()
 		allTools := []tools.BaseTool{
-			tools.NewBashTool(permissions, cwd),
+			tools.NewBashTool(permissions, cwd, cfg.Options.Attribution),
 			tools.NewDownloadTool(permissions, cwd),
 			tools.NewEditTool(lspClients, permissions, history, cwd),
 			tools.NewMultiEditTool(lspClients, permissions, history, cwd),
@@ -204,7 +203,7 @@ func NewAgent(
 		withCoderTools := func(t []tools.BaseTool) []tools.BaseTool {
 			if agentCfg.ID == "coder" {
 				t = append(t, mcpTools...)
-				if len(lspClients) > 0 {
+				if lspClients.Len() > 0 {
 					t = append(t, tools.NewDiagnosticsTool(lspClients))
 				}
 			}
@@ -327,7 +326,13 @@ func (a *agent) generateTitle(ctx context.Context, sessionID string, content str
 		return fmt.Errorf("no response received from title provider")
 	}
 
-	title := strings.TrimSpace(strings.ReplaceAll(finalResponse.Content, "\n", " "))
+	title := strings.ReplaceAll(finalResponse.Content, "\n", " ")
+
+	if idx := strings.Index(title, "</think>"); idx > 0 {
+		title = title[idx+len("</think>"):]
+	}
+
+	title = strings.TrimSpace(title)
 	if title == "" {
 		return nil
 	}
@@ -833,7 +838,7 @@ func (a *agent) Summarize(ctx context.Context, sessionID string) error {
 			if r.Error != nil {
 				event = AgentEvent{
 					Type:  AgentEventTypeError,
-					Error: fmt.Errorf("failed to summarize: %w", err),
+					Error: fmt.Errorf("failed to summarize: %w", r.Error),
 					Done:  true,
 				}
 				a.Publish(pubsub.CreatedEvent, event)
