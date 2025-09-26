@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/charmbracelet/crush/internal/server"
 	"github.com/spf13/cobra"
 )
 
@@ -25,14 +26,23 @@ crush run -q "Generate a README for this project"
   `,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		quiet, _ := cmd.Flags().GetBool("quiet")
+		hostURL, err := server.ParseHostURL(clientHost)
+		if err != nil {
+			return fmt.Errorf("invalid host URL: %v", err)
+		}
 
-		app, err := setupApp(cmd)
+		c, ins, err := setupApp(cmd, hostURL)
 		if err != nil {
 			return err
 		}
-		defer app.Shutdown()
+		defer func() { c.DeleteInstance(cmd.Context(), ins.ID) }()
 
-		if !app.Config().IsConfigured() {
+		cfg, err := c.GetConfig(cmd.Context(), ins.ID)
+		if err != nil {
+			return fmt.Errorf("failed to get config: %v", err)
+		}
+
+		if !cfg.IsConfigured() {
 			return fmt.Errorf("no providers configured - please run 'crush' to set up a provider interactively")
 		}
 
@@ -49,7 +59,10 @@ crush run -q "Generate a README for this project"
 		}
 
 		// Run non-interactive flow using the App method
-		return app.RunNonInteractive(cmd.Context(), prompt, quiet)
+		// return c.RunNonInteractive(cmd.Context(), prompt, quiet)
+		// TODO: implement non-interactive run
+		_ = quiet
+		return nil
 	},
 }
 

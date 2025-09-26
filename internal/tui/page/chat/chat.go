@@ -10,11 +10,12 @@ import (
 	"github.com/charmbracelet/bubbles/v2/spinner"
 	tea "github.com/charmbracelet/bubbletea/v2"
 	"github.com/charmbracelet/catwalk/pkg/catwalk"
-	"github.com/charmbracelet/crush/internal/app"
+	"github.com/charmbracelet/crush/internal/client"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/history"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/tui/components/anim"
@@ -90,7 +91,8 @@ func cancelTimerCmd() tea.Cmd {
 type chatPage struct {
 	width, height               int
 	detailsWidth, detailsHeight int
-	app                         *app.App
+	c                           *client.Client
+	ins                         *proto.Instance
 	keyboardEnhancements        tea.KeyboardEnhancementsMsg
 
 	// Layout state
@@ -117,33 +119,33 @@ type chatPage struct {
 	isProjectInit    bool
 }
 
-func New(app *app.App) ChatPage {
+func New(c *client.Client, ins *proto.Instance) ChatPage {
 	return &chatPage{
-		app:         app,
+		c:           c,
+		ins:         ins,
 		keyMap:      DefaultKeyMap(),
-		header:      header.New(app.LSPClients),
-		sidebar:     sidebar.New(app.History, app.LSPClients, false),
-		chat:        chat.New(app),
-		editor:      editor.New(app),
-		splash:      splash.New(),
+		header:      header.New(c, ins),
+		sidebar:     sidebar.New(c, ins, false),
+		chat:        chat.New(c, ins),
+		editor:      editor.New(c, ins),
+		splash:      splash.New(c, ins),
 		focusedPane: PanelTypeSplash,
 	}
 }
 
 func (p *chatPage) Init() tea.Cmd {
-	cfg := config.Get()
-	compact := cfg.Options.TUI.CompactMode
+	compact := p.ins.Config.Options.TUI.CompactMode
 	p.compact = compact
 	p.forceCompact = compact
 	p.sidebar.SetCompactMode(p.compact)
 
 	// Set splash state based on config
-	if !config.HasInitialDataConfig() {
+	if !config.HasInitialDataConfig(p.ins.Config) {
 		// First-time setup: show model selection
 		p.splash.SetOnboarding(true)
 		p.isOnboarding = true
 		p.splashFullScreen = true
-	} else if b, _ := config.ProjectNeedsInitialization(); b {
+	} else if b, _ := config.ProjectNeedsInitialization(p.ins.Config); b {
 		// Project needs CRUSH.md initialization
 		p.splash.SetProjectInit(true)
 		p.isProjectInit = true
@@ -331,7 +333,11 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return p, tea.Batch(cmds...)
 
 	case commands.CommandRunCustomMsg:
-		if p.app.CoderAgent.IsBusy() {
+		info, err := p.c.GetAgentInfo(context.TODO(), p.ins.ID)
+		if err != nil {
+			return p, util.ReportError(fmt.Errorf("failed to get agent info: %w", err))
+		}
+		if info.IsBusy {
 			return p, util.ReportWarn("Agent is busy, please wait before executing a command...")
 		}
 
@@ -341,12 +347,12 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case splash.OnboardingCompleteMsg:
 		p.splashFullScreen = false
-		if b, _ := config.ProjectNeedsInitialization(); b {
+		if b, _ := config.ProjectNeedsInitialization(p.ins.Config); b {
 			p.splash.SetProjectInit(true)
 			p.splashFullScreen = true
 			return p, p.SetSize(p.width, p.height)
 		}
-		err := p.app.InitCoderAgent()
+		err := p.c.InitiateAgentProcessing(context.TODO(), p.ins.ID)
 		if err != nil {
 			return p, util.ReportError(err)
 		}
@@ -355,7 +361,11 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p.focusedPane = PanelTypeEditor
 		return p, p.SetSize(p.width, p.height)
 	case commands.NewSessionsMsg:
-		if p.app.CoderAgent.IsBusy() {
+		info, err := p.c.GetAgentInfo(context.TODO(), p.ins.ID)
+		if err != nil {
+			return p, util.ReportError(fmt.Errorf("failed to get agent info: %w", err))
+		}
+		if info.IsBusy {
 			return p, util.ReportWarn("Agent is busy, please wait before starting a new session...")
 		}
 		return p, p.newSession()
@@ -363,16 +373,17 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, p.keyMap.NewSession):
 			// if we have no agent do nothing
-			if p.app.CoderAgent == nil {
+			info, err := p.c.GetAgentInfo(context.TODO(), p.ins.ID)
+			if err != nil || info.IsZero() {
 				return p, nil
 			}
-			if p.app.CoderAgent.IsBusy() {
+			if info.IsBusy {
 				return p, util.ReportWarn("Agent is busy, please wait before starting a new session...")
 			}
 			return p, p.newSession()
 		case key.Matches(msg, p.keyMap.AddAttachment):
-			agentCfg := config.Get().Agents["coder"]
-			model := config.Get().GetModelByType(agentCfg.Model)
+			agentCfg := p.ins.Config.Agents["coder"]
+			model := p.ins.Config.GetModelByType(agentCfg.Model)
 			if model.SupportsImages {
 				return p, util.CmdHandler(commands.OpenFilePickerMsg{})
 			} else {
@@ -387,7 +398,11 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			p.changeFocus()
 			return p, nil
 		case key.Matches(msg, p.keyMap.Cancel):
-			if p.session.ID != "" && p.app.CoderAgent.IsBusy() {
+			info, err := p.c.GetAgentInfo(context.TODO(), p.ins.ID)
+			if err != nil {
+				return p, util.ReportError(fmt.Errorf("failed to get agent info: %w", err))
+			}
+			if p.session.ID != "" && info.IsBusy {
 				return p, p.cancel()
 			}
 		case key.Matches(msg, p.keyMap.Details):
@@ -516,7 +531,7 @@ func (p *chatPage) View() string {
 
 func (p *chatPage) updateCompactConfig(compact bool) tea.Cmd {
 	return func() tea.Msg {
-		err := config.Get().SetCompactMode(compact)
+		err := p.ins.Config.SetCompactMode(compact)
 		if err != nil {
 			return util.InfoMsg{
 				Type: util.InfoTypeError,
@@ -529,16 +544,15 @@ func (p *chatPage) updateCompactConfig(compact bool) tea.Cmd {
 
 func (p *chatPage) toggleThinking() tea.Cmd {
 	return func() tea.Msg {
-		cfg := config.Get()
-		agentCfg := cfg.Agents["coder"]
-		currentModel := cfg.Models[agentCfg.Model]
+		agentCfg := p.ins.Config.Agents["coder"]
+		currentModel := p.ins.Config.Models[agentCfg.Model]
 
 		// Toggle the thinking mode
 		currentModel.Think = !currentModel.Think
-		cfg.Models[agentCfg.Model] = currentModel
+		p.ins.Config.Models[agentCfg.Model] = currentModel
 
 		// Update the agent with the new configuration
-		if err := p.app.UpdateAgentModel(); err != nil {
+		if err := p.c.UpdateAgent(context.TODO(), p.ins.ID); err != nil {
 			return util.InfoMsg{
 				Type: util.InfoTypeError,
 				Msg:  "Failed to update thinking mode: " + err.Error(),
@@ -558,16 +572,15 @@ func (p *chatPage) toggleThinking() tea.Cmd {
 
 func (p *chatPage) openReasoningDialog() tea.Cmd {
 	return func() tea.Msg {
-		cfg := config.Get()
-		agentCfg := cfg.Agents["coder"]
-		model := cfg.GetModelByType(agentCfg.Model)
-		providerCfg := cfg.GetProviderForModel(agentCfg.Model)
+		agentCfg := p.ins.Config.Agents["coder"]
+		model := p.ins.Config.GetModelByType(agentCfg.Model)
+		providerCfg := p.ins.Config.GetProviderForModel(agentCfg.Model)
 
 		if providerCfg != nil && model != nil &&
 			providerCfg.Type == catwalk.TypeOpenAI && model.HasReasoningEffort {
 			// Return the OpenDialogMsg directly so it bubbles up to the main TUI
 			return dialogs.OpenDialogMsg{
-				Model: reasoning.NewReasoningDialog(),
+				Model: reasoning.NewReasoningDialog(p.ins.Config),
 			}
 		}
 		return nil
@@ -576,7 +589,7 @@ func (p *chatPage) openReasoningDialog() tea.Cmd {
 
 func (p *chatPage) handleReasoningEffortSelected(effort string) tea.Cmd {
 	return func() tea.Msg {
-		cfg := config.Get()
+		cfg := p.ins.Config
 		agentCfg := cfg.Agents["coder"]
 		currentModel := cfg.Models[agentCfg.Model]
 
@@ -585,7 +598,7 @@ func (p *chatPage) handleReasoningEffortSelected(effort string) tea.Cmd {
 		cfg.Models[agentCfg.Model] = currentModel
 
 		// Update the agent with the new configuration
-		if err := p.app.UpdateAgentModel(); err != nil {
+		if err := p.c.UpdateAgent(context.TODO(), p.ins.ID); err != nil {
 			return util.InfoMsg{
 				Type: util.InfoTypeError,
 				Msg:  "Failed to update reasoning effort: " + err.Error(),
@@ -706,14 +719,13 @@ func (p *chatPage) changeFocus() {
 func (p *chatPage) cancel() tea.Cmd {
 	if p.isCanceling {
 		p.isCanceling = false
-		if p.app.CoderAgent != nil {
-			p.app.CoderAgent.Cancel(p.session.ID)
-		}
+		_ = p.c.ClearAgentSessionQueuedPrompts(context.TODO(), p.ins.ID, p.session.ID)
 		return nil
 	}
 
-	if p.app.CoderAgent != nil && p.app.CoderAgent.QueuedPrompts(p.session.ID) > 0 {
-		p.app.CoderAgent.ClearQueue(p.session.ID)
+	queued, _ := p.c.GetAgentSessionQueuedPrompts(context.TODO(), p.ins.ID, p.session.ID)
+	if queued > 0 {
+		_ = p.c.ClearAgentSessionQueuedPrompts(context.TODO(), p.ins.ID, p.session.ID)
 		return nil
 	}
 	p.isCanceling = true
@@ -739,18 +751,18 @@ func (p *chatPage) sendMessage(text string, attachments []message.Attachment) te
 	session := p.session
 	var cmds []tea.Cmd
 	if p.session.ID == "" {
-		newSession, err := p.app.Sessions.Create(context.Background(), "New Session")
+		newSession, err := p.c.CreateSession(context.Background(), p.ins.ID, "New Session")
 		if err != nil {
 			return util.ReportError(err)
 		}
-		session = newSession
+		session = *newSession
 		cmds = append(cmds, util.CmdHandler(chat.SessionSelectedMsg(session)))
 	}
-	if p.app.CoderAgent == nil {
+	info, err := p.c.GetAgentInfo(context.TODO(), p.ins.ID)
+	if err != nil || info.IsZero() {
 		return util.ReportError(fmt.Errorf("coder agent is not initialized"))
 	}
-	_, err := p.app.CoderAgent.Run(context.Background(), session.ID, text, attachments...)
-	if err != nil {
+	if err := p.c.SendMessage(context.Background(), p.ins.ID, session.ID, text, attachments...); err != nil {
 		return util.ReportError(err)
 	}
 	cmds = append(cmds, p.chat.GoToBottom())
@@ -762,7 +774,8 @@ func (p *chatPage) Bindings() []key.Binding {
 		p.keyMap.NewSession,
 		p.keyMap.AddAttachment,
 	}
-	if p.app.CoderAgent != nil && p.app.CoderAgent.IsBusy() {
+	info, err := p.c.GetAgentInfo(context.TODO(), p.ins.ID)
+	if err == nil && info.IsBusy {
 		cancelBinding := p.keyMap.Cancel
 		if p.isCanceling {
 			cancelBinding = key.NewBinding(
@@ -883,7 +896,8 @@ func (p *chatPage) Help() help.KeyMap {
 			}
 			return core.NewSimpleHelp(shortList, fullList)
 		}
-		if p.app.CoderAgent != nil && p.app.CoderAgent.IsBusy() {
+		info, err := p.c.GetAgentInfo(context.TODO(), p.ins.ID)
+		if err == nil && info.IsBusy {
 			cancelBinding := key.NewBinding(
 				key.WithKeys("esc", "alt+esc"),
 				key.WithHelp("esc", "cancel"),
@@ -894,7 +908,8 @@ func (p *chatPage) Help() help.KeyMap {
 					key.WithHelp("esc", "press again to cancel"),
 				)
 			}
-			if p.app.CoderAgent != nil && p.app.CoderAgent.QueuedPrompts(p.session.ID) > 0 {
+			queued, _ := p.c.GetAgentSessionQueuedPrompts(context.TODO(), p.ins.ID, p.session.ID)
+			if queued > 0 {
 				cancelBinding = key.NewBinding(
 					key.WithKeys("esc", "alt+esc"),
 					key.WithHelp("esc", "clear queue"),

@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/crush/internal/home"
 	"github.com/charmbracelet/crush/internal/llm/tools"
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/version"
 	"github.com/mark3labs/mcp-go/client"
@@ -25,46 +26,20 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// MCPState represents the current state of an MCP client
-type MCPState int
-
-const (
-	MCPStateDisabled MCPState = iota
-	MCPStateStarting
-	MCPStateConnected
-	MCPStateError
+type (
+	MCPState     = proto.MCPState
+	MCPEventType = proto.MCPEventType
+	MCPEvent     = proto.MCPEvent
 )
 
-func (s MCPState) String() string {
-	switch s {
-	case MCPStateDisabled:
-		return "disabled"
-	case MCPStateStarting:
-		return "starting"
-	case MCPStateConnected:
-		return "connected"
-	case MCPStateError:
-		return "error"
-	default:
-		return "unknown"
-	}
-}
-
-// MCPEventType represents the type of MCP event
-type MCPEventType string
-
 const (
-	MCPEventStateChanged MCPEventType = "state_changed"
-)
+	MCPStateDisabled  = proto.MCPStateDisabled
+	MCPStateStarting  = proto.MCPStateStarting
+	MCPStateConnected = proto.MCPStateConnected
+	MCPStateError     = proto.MCPStateError
 
-// MCPEvent represents an event in the MCP system
-type MCPEvent struct {
-	Type      MCPEventType
-	Name      string
-	State     MCPState
-	Error     error
-	ToolCount int
-}
+	MCPEventStateChanged = proto.MCPEventStateChanged
+)
 
 // MCPClientInfo holds information about an MCP client's state
 type MCPClientInfo struct {
@@ -88,7 +63,7 @@ type McpTool struct {
 	mcpName     string
 	tool        mcp.Tool
 	permissions permission.Service
-	workingDir  string
+	cfg         *config.Config
 }
 
 func (b *McpTool) Name() string {
@@ -112,13 +87,13 @@ func (b *McpTool) Info() tools.ToolInfo {
 	}
 }
 
-func runTool(ctx context.Context, name, toolName string, input string) (tools.ToolResponse, error) {
+func runTool(ctx context.Context, cfg *config.Config, name, toolName string, input string) (tools.ToolResponse, error) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return tools.NewTextErrorResponse(fmt.Sprintf("error parsing parameters: %s", err)), nil
 	}
 
-	c, err := getOrRenewClient(ctx, name)
+	c, err := getOrRenewClient(ctx, cfg, name)
 	if err != nil {
 		return tools.NewTextErrorResponse(err.Error()), nil
 	}
@@ -143,13 +118,12 @@ func runTool(ctx context.Context, name, toolName string, input string) (tools.To
 	return tools.NewTextResponse(strings.Join(output, "\n")), nil
 }
 
-func getOrRenewClient(ctx context.Context, name string) (*client.Client, error) {
+func getOrRenewClient(ctx context.Context, cfg *config.Config, name string) (*client.Client, error) {
 	c, ok := mcpClients.Get(name)
 	if !ok {
 		return nil, fmt.Errorf("mcp '%s' not available", name)
 	}
 
-	cfg := config.Get()
 	m := cfg.MCP[name]
 	state, _ := mcpStates.Get(name)
 
@@ -162,7 +136,7 @@ func getOrRenewClient(ctx context.Context, name string) (*client.Client, error) 
 	}
 	updateMCPState(name, MCPStateError, maybeTimeoutErr(err, timeout), nil, state.ToolCount)
 
-	c, err = createAndInitializeClient(ctx, name, m, cfg.Resolver())
+	c, err = createAndInitializeClient(ctx, name, m, config.OsShellResolver)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +156,7 @@ func (b *McpTool) Run(ctx context.Context, params tools.ToolCall) (tools.ToolRes
 		permission.CreatePermissionRequest{
 			SessionID:   sessionID,
 			ToolCallID:  params.ID,
-			Path:        b.workingDir,
+			Path:        b.cfg.WorkingDir(),
 			ToolName:    b.Info().Name,
 			Action:      "execute",
 			Description: permissionDescription,
@@ -193,10 +167,10 @@ func (b *McpTool) Run(ctx context.Context, params tools.ToolCall) (tools.ToolRes
 		return tools.ToolResponse{}, permission.ErrorPermissionDenied
 	}
 
-	return runTool(ctx, b.mcpName, b.tool.Name, params.Input)
+	return runTool(ctx, b.cfg, b.mcpName, b.tool.Name, params.Input)
 }
 
-func getTools(ctx context.Context, name string, permissions permission.Service, c *client.Client, workingDir string) []tools.BaseTool {
+func getTools(ctx context.Context, name string, permissions permission.Service, c *client.Client, cfg *config.Config) []tools.BaseTool {
 	result, err := c.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
 		slog.Error("error listing tools", "error", err)
@@ -211,7 +185,7 @@ func getTools(ctx context.Context, name string, permissions permission.Service, 
 			mcpName:     name,
 			tool:        tool,
 			permissions: permissions,
-			workingDir:  workingDir,
+			cfg:         cfg,
 		})
 	}
 	return mcpTools
@@ -314,13 +288,13 @@ func doGetMCPTools(ctx context.Context, permissions permission.Service, cfg *con
 
 			ctx, cancel := context.WithTimeout(ctx, mcpTimeout(m))
 			defer cancel()
-			c, err := createAndInitializeClient(ctx, name, m, cfg.Resolver())
+			c, err := createAndInitializeClient(ctx, name, m, config.OsShellResolver)
 			if err != nil {
 				return
 			}
 			mcpClients.Set(name, c)
 
-			tools := getTools(ctx, name, permissions, c, cfg.WorkingDir())
+			tools := getTools(ctx, name, permissions, c, cfg)
 			updateMCPState(name, MCPStateConnected, nil, c, len(tools))
 			result.Append(tools...)
 		}(name, m)

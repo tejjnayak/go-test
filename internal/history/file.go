@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/crush/internal/db"
+	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/google/uuid"
 )
@@ -15,15 +16,7 @@ const (
 	InitialVersion = 0
 )
 
-type File struct {
-	ID        string
-	SessionID string
-	Path      string
-	Content   string
-	Version   int64
-	CreatedAt int64
-	UpdatedAt int64
-}
+type File = proto.File
 
 type Service interface {
 	pubsub.Suscriber[File]

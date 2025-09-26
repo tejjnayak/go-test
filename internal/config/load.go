@@ -15,12 +15,14 @@ import (
 
 	"github.com/charmbracelet/catwalk/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/csync"
-	"github.com/charmbracelet/crush/internal/env"
 	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/home"
-	"github.com/charmbracelet/crush/internal/log"
+	"github.com/charmbracelet/crush/internal/version"
+	uv "github.com/charmbracelet/ultraviolet"
 	powernapConfig "github.com/charmbracelet/x/powernap/pkg/config"
 )
+
+type environ = uv.Environ
 
 const defaultCatwalkURL = "https://catwalk.charm.sh"
 
@@ -40,7 +42,7 @@ func LoadReader(fd io.Reader) (*Config, error) {
 }
 
 // Load loads the configuration from the default paths.
-func Load(workingDir, dataDir string, debug bool) (*Config, error) {
+func Load(workingDir, dataDir string, debug bool, envs []string) (*Config, error) {
 	configPaths := lookupConfigs(workingDir)
 
 	cfg, err := loadFromConfigPaths(configPaths)
@@ -56,12 +58,6 @@ func Load(workingDir, dataDir string, debug bool) (*Config, error) {
 		cfg.Options.Debug = true
 	}
 
-	// Setup logs
-	log.Setup(
-		filepath.Join(cfg.Options.DataDirectory, "logs", fmt.Sprintf("%s.log", appName)),
-		cfg.Options.Debug,
-	)
-
 	// Load known providers, this loads the config from catwalk
 	providers, err := Providers(cfg)
 	if err != nil {
@@ -69,11 +65,9 @@ func Load(workingDir, dataDir string, debug bool) (*Config, error) {
 	}
 	cfg.knownProviders = providers
 
-	env := env.New()
 	// Configure providers
-	valueResolver := NewShellVariableResolver(env)
-	cfg.resolver = valueResolver
-	if err := cfg.configureProviders(env, valueResolver, cfg.knownProviders); err != nil {
+	valueResolver := NewShellVariableResolver(envs)
+	if err := cfg.configureProviders(envs, valueResolver, cfg.knownProviders); err != nil {
 		return nil, fmt.Errorf("failed to configure providers: %w", err)
 	}
 
@@ -117,7 +111,7 @@ func PushPopCrushEnv() func() {
 	return restore
 }
 
-func (c *Config) configureProviders(env env.Env, resolver VariableResolver, knownProviders []catwalk.Provider) error {
+func (c *Config) configureProviders(env environ, resolver VariableResolver, knownProviders []catwalk.Provider) error {
 	knownProviderNames := make(map[string]bool)
 	restore := PushPopCrushEnv()
 	defer restore()
@@ -192,8 +186,8 @@ func (c *Config) configureProviders(env env.Env, resolver VariableResolver, know
 				}
 				continue
 			}
-			prepared.ExtraParams["project"] = env.Get("VERTEXAI_PROJECT")
-			prepared.ExtraParams["location"] = env.Get("VERTEXAI_LOCATION")
+			prepared.ExtraParams["project"] = env.Getenv("VERTEXAI_PROJECT")
+			prepared.ExtraParams["location"] = env.Getenv("VERTEXAI_LOCATION")
 		case catwalk.InferenceProviderAzure:
 			endpoint, err := resolver.ResolveValue(p.APIEndpoint)
 			if err != nil || endpoint == "" {
@@ -204,7 +198,7 @@ func (c *Config) configureProviders(env env.Env, resolver VariableResolver, know
 				continue
 			}
 			prepared.BaseURL = endpoint
-			prepared.ExtraParams["apiVersion"] = env.Get("AZURE_OPENAI_API_VERSION")
+			prepared.ExtraParams["apiVersion"] = env.Getenv("AZURE_OPENAI_API_VERSION")
 		case catwalk.InferenceProviderBedrock:
 			if !hasAWSCredentials(env) {
 				if configExists {
@@ -213,9 +207,9 @@ func (c *Config) configureProviders(env env.Env, resolver VariableResolver, know
 				}
 				continue
 			}
-			prepared.ExtraParams["region"] = env.Get("AWS_REGION")
+			prepared.ExtraParams["region"] = env.Getenv("AWS_REGION")
 			if prepared.ExtraParams["region"] == "" {
-				prepared.ExtraParams["region"] = env.Get("AWS_DEFAULT_REGION")
+				prepared.ExtraParams["region"] = env.Getenv("AWS_DEFAULT_REGION")
 			}
 			for _, model := range p.Models {
 				if !strings.HasPrefix(model.ID, "anthropic.") {
@@ -524,7 +518,11 @@ func lookupConfigs(cwd string) []string {
 		GlobalConfigData(),
 	}
 
-	configNames := []string{appName + ".json", "." + appName + ".json"}
+	if cwd == "" {
+		return configPaths
+	}
+
+	configNames := []string{version.AppName + ".json", "." + version.AppName + ".json"}
 
 	foundConfigs, err := fsext.Lookup(cwd, configNames...)
 	if err != nil {
@@ -570,27 +568,27 @@ func loadFromReaders(readers []io.Reader) (*Config, error) {
 	return LoadReader(merged)
 }
 
-func hasVertexCredentials(env env.Env) bool {
-	hasProject := env.Get("VERTEXAI_PROJECT") != ""
-	hasLocation := env.Get("VERTEXAI_LOCATION") != ""
+func hasVertexCredentials(env environ) bool {
+	hasProject := env.Getenv("VERTEXAI_PROJECT") != ""
+	hasLocation := env.Getenv("VERTEXAI_LOCATION") != ""
 	return hasProject && hasLocation
 }
 
-func hasAWSCredentials(env env.Env) bool {
-	if env.Get("AWS_ACCESS_KEY_ID") != "" && env.Get("AWS_SECRET_ACCESS_KEY") != "" {
+func hasAWSCredentials(env environ) bool {
+	if env.Getenv("AWS_ACCESS_KEY_ID") != "" && env.Getenv("AWS_SECRET_ACCESS_KEY") != "" {
 		return true
 	}
 
-	if env.Get("AWS_PROFILE") != "" || env.Get("AWS_DEFAULT_PROFILE") != "" {
+	if env.Getenv("AWS_PROFILE") != "" || env.Getenv("AWS_DEFAULT_PROFILE") != "" {
 		return true
 	}
 
-	if env.Get("AWS_REGION") != "" || env.Get("AWS_DEFAULT_REGION") != "" {
+	if env.Getenv("AWS_REGION") != "" || env.Getenv("AWS_DEFAULT_REGION") != "" {
 		return true
 	}
 
-	if env.Get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") != "" ||
-		env.Get("AWS_CONTAINER_CREDENTIALS_FULL_URI") != "" {
+	if env.Getenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") != "" ||
+		env.Getenv("AWS_CONTAINER_CREDENTIALS_FULL_URI") != "" {
 		return true
 	}
 	return false
@@ -599,7 +597,7 @@ func hasAWSCredentials(env env.Env) bool {
 func globalConfig() string {
 	xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
 	if xdgConfigHome != "" {
-		return filepath.Join(xdgConfigHome, appName, fmt.Sprintf("%s.json", appName))
+		return filepath.Join(xdgConfigHome, version.AppName, fmt.Sprintf("%s.json", version.AppName))
 	}
 
 	// return the path to the main config directory
@@ -610,10 +608,10 @@ func globalConfig() string {
 		if localAppData == "" {
 			localAppData = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")
 		}
-		return filepath.Join(localAppData, appName, fmt.Sprintf("%s.json", appName))
+		return filepath.Join(localAppData, version.AppName, fmt.Sprintf("%s.json", version.AppName))
 	}
 
-	return filepath.Join(home.Dir(), ".config", appName, fmt.Sprintf("%s.json", appName))
+	return filepath.Join(home.Dir(), ".config", version.AppName, fmt.Sprintf("%s.json", version.AppName))
 }
 
 // GlobalConfigData returns the path to the main data directory for the application.
@@ -621,7 +619,7 @@ func globalConfig() string {
 func GlobalConfigData() string {
 	xdgDataHome := os.Getenv("XDG_DATA_HOME")
 	if xdgDataHome != "" {
-		return filepath.Join(xdgDataHome, appName, fmt.Sprintf("%s.json", appName))
+		return filepath.Join(xdgDataHome, version.AppName, fmt.Sprintf("%s.json", version.AppName))
 	}
 
 	// return the path to the main data directory
@@ -632,8 +630,29 @@ func GlobalConfigData() string {
 		if localAppData == "" {
 			localAppData = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")
 		}
-		return filepath.Join(localAppData, appName, fmt.Sprintf("%s.json", appName))
+		return filepath.Join(localAppData, version.AppName, fmt.Sprintf("%s.json", version.AppName))
 	}
 
-	return filepath.Join(home.Dir(), ".local", "share", appName, fmt.Sprintf("%s.json", appName))
+	return filepath.Join(home.Dir(), ".local", "share", version.AppName, fmt.Sprintf("%s.json", version.AppName))
+}
+
+// GlobalCacheDir returns the path to the main cache directory for the application.
+func GlobalCacheDir() string {
+	xdgCacheHome := os.Getenv("XDG_CACHE_HOME")
+	if xdgCacheHome != "" {
+		return filepath.Join(xdgCacheHome, version.AppName)
+	}
+
+	// return the path to the main cache directory
+	// for windows, it should be in `%LOCALAPPDATA%/crush/Cache`
+	// for linux and macOS, it should be in `$HOME/.cache/crush/`
+	if runtime.GOOS == "windows" {
+		localAppData := os.Getenv("LOCALAPPDATA")
+		if localAppData == "" {
+			localAppData = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")
+		}
+		return filepath.Join(localAppData, version.AppName, "Cache")
+	}
+
+	return filepath.Join(home.Dir(), ".cache", version.AppName)
 }

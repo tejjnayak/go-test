@@ -22,29 +22,29 @@ func (app *App) initLSPClients(ctx context.Context) {
 }
 
 // createAndStartLSPClient creates a new LSP client, initializes it, and starts its workspace watcher
-func (app *App) createAndStartLSPClient(ctx context.Context, name string, config config.LSPConfig) {
-	slog.Info("Creating LSP client", "name", name, "command", config.Command, "fileTypes", config.FileTypes, "args", config.Args)
+func (app *App) createAndStartLSPClient(ctx context.Context, name string, lspCfg config.LSPConfig) {
+	slog.Info("Creating LSP client", "name", name, "command", lspCfg.Command, "fileTypes", lspCfg.FileTypes, "args", lspCfg.Args)
 
 	// Check if any root markers exist in the working directory (config now has defaults)
-	if !lsp.HasRootMarkers(app.config.WorkingDir(), config.RootMarkers) {
-		slog.Info("Skipping LSP client - no root markers found", "name", name, "rootMarkers", config.RootMarkers)
-		updateLSPState(name, lsp.StateDisabled, nil, nil, 0)
+	if !lsp.HasRootMarkers(app.config.WorkingDir(), lspCfg.RootMarkers) {
+		slog.Info("Skipping LSP client - no root markers found", "name", name, "rootMarkers", lspCfg.RootMarkers)
+		app.updateLSPState(name, lsp.StateDisabled, nil, 0)
 		return
 	}
 
 	// Update state to starting
-	updateLSPState(name, lsp.StateStarting, nil, nil, 0)
+	app.updateLSPState(name, lsp.StateStarting, nil, 0)
 
 	// Create LSP client.
-	lspClient, err := lsp.New(ctx, name, config, app.config.Resolver())
+	lspClient, err := lsp.New(ctx, app.config, name, lspCfg, config.OsShellResolver)
 	if err != nil {
 		slog.Error("Failed to create LSP client for", name, err)
-		updateLSPState(name, lsp.StateError, err, nil, 0)
+		app.updateLSPState(name, lsp.StateError, err, 0)
 		return
 	}
 
 	// Set diagnostics callback
-	lspClient.SetDiagnosticsCallback(updateLSPDiagnostics)
+	lspClient.SetDiagnosticsCallback(app.updateLSPDiagnostics)
 
 	// Increase initialization timeout as some servers take more time to start.
 	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -54,7 +54,7 @@ func (app *App) createAndStartLSPClient(ctx context.Context, name string, config
 	_, err = lspClient.Initialize(initCtx, app.config.WorkingDir())
 	if err != nil {
 		slog.Error("Initialize failed", "name", name, "error", err)
-		updateLSPState(name, lsp.StateError, err, lspClient, 0)
+		app.updateLSPState(name, lsp.StateError, err, 0)
 		lspClient.Close(ctx)
 		return
 	}
@@ -65,12 +65,12 @@ func (app *App) createAndStartLSPClient(ctx context.Context, name string, config
 		// Server never reached a ready state, but let's continue anyway, as
 		// some functionality might still work.
 		lspClient.SetServerState(lsp.StateError)
-		updateLSPState(name, lsp.StateError, err, lspClient, 0)
+		app.updateLSPState(name, lsp.StateError, err, 0)
 	} else {
 		// Server reached a ready state scuccessfully.
 		slog.Info("LSP server is ready", "name", name)
 		lspClient.SetServerState(lsp.StateReady)
-		updateLSPState(name, lsp.StateReady, nil, lspClient, 0)
+		app.updateLSPState(name, lsp.StateReady, nil, 0)
 	}
 
 	slog.Info("LSP client initialized", "name", name)

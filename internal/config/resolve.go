@@ -3,10 +3,10 @@ package config
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/crush/internal/env"
 	"github.com/charmbracelet/crush/internal/shell"
 )
 
@@ -18,17 +18,17 @@ type Shell interface {
 	Exec(ctx context.Context, command string) (stdout, stderr string, err error)
 }
 
-type shellVariableResolver struct {
+type ShellVariableResolver struct {
 	shell Shell
-	env   env.Env
+	env   []string
 }
 
-func NewShellVariableResolver(env env.Env) VariableResolver {
-	return &shellVariableResolver{
+func NewShellVariableResolver(env []string) *ShellVariableResolver {
+	return &ShellVariableResolver{
 		env: env,
 		shell: shell.NewShell(
 			&shell.Options{
-				Env: env.Env(),
+				Env: env,
 			},
 		),
 	}
@@ -38,7 +38,8 @@ func NewShellVariableResolver(env env.Env) VariableResolver {
 // it will resolve shell-like variable substitution anywhere in the string, including:
 // - $(command) for command substitution
 // - $VAR or ${VAR} for environment variables
-func (r *shellVariableResolver) ResolveValue(value string) (string, error) {
+// TODO: can we replace this with [os.Expand](https://pkg.go.dev/os#Expand) somehow?
+func (r *ShellVariableResolver) ResolveValue(value string) (string, error) {
 	// Special case: lone $ is an error (backward compatibility)
 	if value == "$" {
 		return "", fmt.Errorf("invalid value format: %s", value)
@@ -139,7 +140,7 @@ func (r *shellVariableResolver) ResolveValue(value string) (string, error) {
 			varName = result[start+1 : end]
 		}
 
-		envValue := r.env.Get(varName)
+		envValue := environ(r.env).Getenv(varName)
 		if envValue == "" {
 			return "", fmt.Errorf("environment variable %q not set", varName)
 		}
@@ -152,10 +153,10 @@ func (r *shellVariableResolver) ResolveValue(value string) (string, error) {
 }
 
 type environmentVariableResolver struct {
-	env env.Env
+	env []string
 }
 
-func NewEnvironmentVariableResolver(env env.Env) VariableResolver {
+func NewEnvironmentVariableResolver(env []string) VariableResolver {
 	return &environmentVariableResolver{
 		env: env,
 	}
@@ -163,14 +164,5 @@ func NewEnvironmentVariableResolver(env env.Env) VariableResolver {
 
 // ResolveValue resolves environment variables from the provided env.Env.
 func (r *environmentVariableResolver) ResolveValue(value string) (string, error) {
-	if !strings.HasPrefix(value, "$") {
-		return value, nil
-	}
-
-	varName := strings.TrimPrefix(value, "$")
-	resolvedValue := r.env.Get(varName)
-	if resolvedValue == "" {
-		return "", fmt.Errorf("environment variable %q not set", varName)
-	}
-	return resolvedValue, nil
+	return os.Expand(value, environ(r.env).Getenv), nil
 }

@@ -43,13 +43,13 @@ func createOpenAIClient(opts providerClientOptions) openai.Client {
 		openaiClientOptions = append(openaiClientOptions, option.WithAPIKey(opts.apiKey))
 	}
 	if opts.baseURL != "" {
-		resolvedBaseURL, err := config.Get().Resolve(opts.baseURL)
+		resolvedBaseURL, err := opts.resolver.ResolveValue(opts.baseURL)
 		if err == nil && resolvedBaseURL != "" {
 			openaiClientOptions = append(openaiClientOptions, option.WithBaseURL(resolvedBaseURL))
 		}
 	}
 
-	if config.Get().Options.Debug {
+	if opts.cfg.Options.Debug {
 		httpClient := log.NewHTTPClient()
 		openaiClientOptions = append(openaiClientOptions, option.WithHTTPClient(httpClient))
 	}
@@ -218,7 +218,7 @@ func (o *openaiClient) finishReason(reason string) message.FinishReason {
 
 func (o *openaiClient) preparedParams(messages []openai.ChatCompletionMessageParamUnion, tools []openai.ChatCompletionToolParam) openai.ChatCompletionNewParams {
 	model := o.providerOptions.model(o.providerOptions.modelType)
-	cfg := config.Get()
+	cfg := o.providerOptions.cfg
 
 	modelConfig := cfg.Models[config.SelectedModelTypeLarge]
 	if o.providerOptions.modelType == config.SelectedModelTypeSmall {
@@ -517,7 +517,7 @@ func (o *openaiClient) shouldRetry(attempts int, err error) (bool, int64, error)
 		if apiErr.StatusCode == http.StatusUnauthorized {
 			prev := o.providerOptions.apiKey
 			// in case the key comes from a script, we try to re-evaluate it.
-			o.providerOptions.apiKey, err = config.Get().Resolve(o.providerOptions.config.APIKey)
+			o.providerOptions.apiKey, err = o.providerOptions.resolver.ResolveValue(o.providerOptions.config.APIKey)
 			if err != nil {
 				return false, 0, fmt.Errorf("failed to resolve API key: %w", err)
 			}

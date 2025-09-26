@@ -9,9 +9,11 @@ import (
 	"github.com/charmbracelet/bubbles/v2/spinner"
 	tea "github.com/charmbracelet/bubbletea/v2"
 	"github.com/charmbracelet/catwalk/pkg/catwalk"
+	"github.com/charmbracelet/crush/internal/client"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/home"
 	"github.com/charmbracelet/crush/internal/llm/prompt"
+	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/tui/components/chat"
 	"github.com/charmbracelet/crush/internal/tui/components/core"
 	"github.com/charmbracelet/crush/internal/tui/components/core/layout"
@@ -72,9 +74,12 @@ type splashCmp struct {
 	selectedModel *models.ModelOption
 	isAPIKeyValid bool
 	apiKeyValue   string
+
+	c   *client.Client
+	ins *proto.Instance
 }
 
-func New() Splash {
+func New(c *client.Client, ins *proto.Instance) Splash {
 	keyMap := DefaultKeyMap()
 	listKeyMap := list.DefaultKeyMap()
 	listKeyMap.Down.SetEnabled(false)
@@ -86,10 +91,12 @@ func New() Splash {
 	listKeyMap.DownOneItem = keyMap.Next
 	listKeyMap.UpOneItem = keyMap.Previous
 
-	modelList := models.NewModelListComponent(listKeyMap, "Find your fave", false)
+	modelList := models.NewModelListComponent(ins.Config, listKeyMap, "Find your fave", false)
 	apiKeyInput := models.NewAPIKeyInput()
 
 	return &splashCmp{
+		c:            c,
+		ins:          ins,
 		width:        0,
 		height:       0,
 		keyMap:       keyMap,
@@ -211,7 +218,7 @@ func (s *splashCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}),
 					func() tea.Msg {
 						start := time.Now()
-						err := providerConfig.TestConnection(config.Get().Resolver())
+						err := providerConfig.TestConnection(s.ins.ShellResolver())
 						// intentionally wait for at least 750ms to make sure the user sees the spinner
 						elapsed := time.Since(start)
 						if elapsed < 750*time.Millisecond {
@@ -305,8 +312,7 @@ func (s *splashCmp) saveAPIKeyAndContinue(apiKey string) tea.Cmd {
 		return nil
 	}
 
-	cfg := config.Get()
-	err := cfg.SetProviderAPIKey(string(s.selectedModel.Provider.ID), apiKey)
+	err := s.ins.Config.SetProviderAPIKey(string(s.selectedModel.Provider.ID), apiKey)
 	if err != nil {
 		return util.ReportError(fmt.Errorf("failed to save API key: %w", err))
 	}
@@ -324,7 +330,7 @@ func (s *splashCmp) saveAPIKeyAndContinue(apiKey string) tea.Cmd {
 func (s *splashCmp) initializeProject() tea.Cmd {
 	s.needsProjectInit = false
 
-	if err := config.MarkProjectInitialized(); err != nil {
+	if err := config.MarkProjectInitialized(s.ins.Config); err != nil {
 		return util.ReportError(err)
 	}
 	var cmds []tea.Cmd
@@ -342,8 +348,7 @@ func (s *splashCmp) initializeProject() tea.Cmd {
 }
 
 func (s *splashCmp) setPreferredModel(selectedItem models.ModelOption) tea.Cmd {
-	cfg := config.Get()
-	model := cfg.GetModel(string(selectedItem.Provider.ID), selectedItem.Model.ID)
+	model := s.ins.Config.GetModel(string(selectedItem.Provider.ID), selectedItem.Model.ID)
 	if model == nil {
 		return util.ReportError(fmt.Errorf("model %s not found for provider %s", selectedItem.Model.ID, selectedItem.Provider.ID))
 	}
@@ -355,7 +360,7 @@ func (s *splashCmp) setPreferredModel(selectedItem models.ModelOption) tea.Cmd {
 		MaxTokens:       model.DefaultMaxTokens,
 	}
 
-	err := cfg.UpdatePreferredModel(config.SelectedModelTypeLarge, selectedModel)
+	err := s.ins.Config.UpdatePreferredModel(config.SelectedModelTypeLarge, selectedModel)
 	if err != nil {
 		return util.ReportError(err)
 	}
@@ -367,16 +372,16 @@ func (s *splashCmp) setPreferredModel(selectedItem models.ModelOption) tea.Cmd {
 	}
 	if knownProvider == nil {
 		// for local provider we just use the same model
-		err = cfg.UpdatePreferredModel(config.SelectedModelTypeSmall, selectedModel)
+		err = s.ins.Config.UpdatePreferredModel(config.SelectedModelTypeSmall, selectedModel)
 		if err != nil {
 			return util.ReportError(err)
 		}
 	} else {
 		smallModel := knownProvider.DefaultSmallModelID
-		model := cfg.GetModel(string(selectedItem.Provider.ID), smallModel)
+		model := s.ins.Config.GetModel(string(selectedItem.Provider.ID), smallModel)
 		// should never happen
 		if model == nil {
-			err = cfg.UpdatePreferredModel(config.SelectedModelTypeSmall, selectedModel)
+			err = s.ins.Config.UpdatePreferredModel(config.SelectedModelTypeSmall, selectedModel)
 			if err != nil {
 				return util.ReportError(err)
 			}
@@ -388,18 +393,17 @@ func (s *splashCmp) setPreferredModel(selectedItem models.ModelOption) tea.Cmd {
 			ReasoningEffort: model.DefaultReasoningEffort,
 			MaxTokens:       model.DefaultMaxTokens,
 		}
-		err = cfg.UpdatePreferredModel(config.SelectedModelTypeSmall, smallSelectedModel)
+		err = s.ins.Config.UpdatePreferredModel(config.SelectedModelTypeSmall, smallSelectedModel)
 		if err != nil {
 			return util.ReportError(err)
 		}
 	}
-	cfg.SetupAgents()
+	s.ins.Config.SetupAgents()
 	return nil
 }
 
 func (s *splashCmp) getProvider(providerID catwalk.InferenceProvider) (*catwalk.Provider, error) {
-	cfg := config.Get()
-	providers, err := config.Providers(cfg)
+	providers, err := config.Providers(s.ins.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -412,8 +416,7 @@ func (s *splashCmp) getProvider(providerID catwalk.InferenceProvider) (*catwalk.
 }
 
 func (s *splashCmp) isProviderConfigured(providerID string) bool {
-	cfg := config.Get()
-	if _, ok := cfg.Providers.Get(providerID); ok {
+	if _, ok := s.ins.Config.Providers.Get(providerID); ok {
 		return true
 	}
 	return false
@@ -650,11 +653,11 @@ func (s *splashCmp) cwdPart() string {
 }
 
 func (s *splashCmp) cwd() string {
-	return home.Short(config.Get().WorkingDir())
+	return home.Short(s.ins.Config.WorkingDir())
 }
 
-func LSPList(maxWidth int) []string {
-	return lspcomponent.RenderLSPList(nil, lspcomponent.RenderOptions{
+func LSPList(c *client.Client, ins *proto.Instance, maxWidth int) []string {
+	return lspcomponent.RenderLSPList(c, ins, lspcomponent.RenderOptions{
 		MaxWidth:    maxWidth,
 		ShowSection: false,
 	})
@@ -664,7 +667,7 @@ func (s *splashCmp) lspBlock() string {
 	t := styles.CurrentTheme()
 	maxWidth := s.getMaxInfoWidth() / 2
 	section := t.S().Subtle.Render("LSPs")
-	lspList := append([]string{section, ""}, LSPList(maxWidth-1)...)
+	lspList := append([]string{section, ""}, LSPList(s.c, s.ins, maxWidth-1)...)
 	return t.S().Base.Width(maxWidth).PaddingRight(1).Render(
 		lipgloss.JoinVertical(
 			lipgloss.Left,
@@ -673,8 +676,8 @@ func (s *splashCmp) lspBlock() string {
 	)
 }
 
-func MCPList(maxWidth int) []string {
-	return mcp.RenderMCPList(mcp.RenderOptions{
+func MCPList(cfg *config.Config, maxWidth int) []string {
+	return mcp.RenderMCPList(cfg, mcp.RenderOptions{
 		MaxWidth:    maxWidth,
 		ShowSection: false,
 	})
@@ -684,7 +687,7 @@ func (s *splashCmp) mcpBlock() string {
 	t := styles.CurrentTheme()
 	maxWidth := s.getMaxInfoWidth() / 2
 	section := t.S().Subtle.Render("MCPs")
-	mcpList := append([]string{section, ""}, MCPList(maxWidth-1)...)
+	mcpList := append([]string{section, ""}, MCPList(s.ins.Config, maxWidth-1)...)
 	return t.S().Base.Width(maxWidth).PaddingRight(1).Render(
 		lipgloss.JoinVertical(
 			lipgloss.Left,
@@ -694,9 +697,8 @@ func (s *splashCmp) mcpBlock() string {
 }
 
 func (s *splashCmp) currentModelBlock() string {
-	cfg := config.Get()
-	agentCfg := cfg.Agents["coder"]
-	model := config.Get().GetModelByType(agentCfg.Model)
+	agentCfg := s.ins.Config.Agents["coder"]
+	model := s.ins.Config.GetModelByType(agentCfg.Model)
 	if model == nil {
 		return ""
 	}

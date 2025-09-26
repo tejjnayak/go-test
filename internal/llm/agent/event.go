@@ -3,7 +3,6 @@ package agent
 import (
 	"time"
 
-	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/llm/provider"
 )
@@ -39,8 +38,7 @@ func (a *agent) eventTokensUsed(sessionID string, usage provider.TokenUsage, cos
 }
 
 func (a *agent) eventCommon(sessionID string) []any {
-	cfg := config.Get()
-	currentModel := cfg.Models[cfg.Agents["coder"].Model]
+	currentModel := a.cfg.Models[a.cfg.Agents["coder"].Model]
 
 	return []any{
 		"session id", sessionID,

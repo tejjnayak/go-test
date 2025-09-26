@@ -23,6 +23,7 @@ import (
 
 type Client struct {
 	client *powernap.Client
+	cfg    *config.Config
 	name   string
 
 	// File types this LSP server handles (e.g., .go, .rs, .py)
@@ -45,7 +46,7 @@ type Client struct {
 }
 
 // New creates a new LSP client using the powernap implementation.
-func New(ctx context.Context, name string, config config.LSPConfig, resolver config.VariableResolver) (*Client, error) {
+func New(ctx context.Context, cfg *config.Config, name string, lspCfg config.LSPConfig, resolver config.VariableResolver) (*Client, error) {
 	// Convert working directory to file URI
 	workDir, err := os.Getwd()
 	if err != nil {
@@ -54,7 +55,7 @@ func New(ctx context.Context, name string, config config.LSPConfig, resolver con
 
 	rootURI := string(protocol.URIFromPath(workDir))
 
-	command, err := resolver.ResolveValue(config.Command)
+	command, err := resolver.ResolveValue(lspCfg.Command)
 	if err != nil {
 		return nil, fmt.Errorf("invalid lsp command: %w", err)
 	}
@@ -62,15 +63,15 @@ func New(ctx context.Context, name string, config config.LSPConfig, resolver con
 	// Create powernap client config
 	clientConfig := powernap.ClientConfig{
 		Command: home.Long(command),
-		Args:    config.Args,
+		Args:    lspCfg.Args,
 		RootURI: rootURI,
 		Environment: func() map[string]string {
 			env := make(map[string]string)
-			maps.Copy(env, config.Env)
+			maps.Copy(env, lspCfg.Env)
 			return env
 		}(),
-		Settings:    config.Options,
-		InitOptions: config.InitOptions,
+		Settings:    lspCfg.Options,
+		InitOptions: lspCfg.InitOptions,
 		WorkspaceFolders: []protocol.WorkspaceFolder{
 			{
 				URI:  rootURI,
@@ -86,12 +87,13 @@ func New(ctx context.Context, name string, config config.LSPConfig, resolver con
 	}
 
 	client := &Client{
+		cfg:         cfg,
 		client:      powernapClient,
 		name:        name,
-		fileTypes:   config.FileTypes,
+		fileTypes:   lspCfg.FileTypes,
 		diagnostics: csync.NewVersionedMap[protocol.DocumentURI, []protocol.Diagnostic](),
 		openFiles:   csync.NewMap[string, *OpenFileInfo](),
-		config:      config,
+		config:      lspCfg,
 	}
 
 	// Initialize server state
@@ -163,6 +165,37 @@ const (
 	StateDisabled
 )
 
+func (s ServerState) MarshalText() ([]byte, error) {
+	switch s {
+	case StateStarting:
+		return []byte("starting"), nil
+	case StateReady:
+		return []byte("ready"), nil
+	case StateError:
+		return []byte("error"), nil
+	case StateDisabled:
+		return []byte("disabled"), nil
+	default:
+		return nil, fmt.Errorf("unknown server state: %d", s)
+	}
+}
+
+func (s *ServerState) UnmarshalText(data []byte) error {
+	switch strings.ToLower(string(data)) {
+	case "starting":
+		*s = StateStarting
+	case "ready":
+		*s = StateReady
+	case "error":
+		*s = StateError
+	case "disabled":
+		*s = StateDisabled
+	default:
+		return fmt.Errorf("unknown server state: %s", data)
+	}
+	return nil
+}
+
 // GetServerState returns the current state of the LSP server
 func (c *Client) GetServerState() ServerState {
 	if val := c.serverState.Load(); val != nil {
@@ -188,8 +221,6 @@ func (c *Client) SetDiagnosticsCallback(callback func(name string, count int)) {
 
 // WaitForServerReady waits for the server to be ready
 func (c *Client) WaitForServerReady(ctx context.Context) error {
-	cfg := config.Get()
-
 	// Set initial state
 	c.SetServerState(StateStarting)
 
@@ -201,7 +232,7 @@ func (c *Client) WaitForServerReady(ctx context.Context) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
-	if cfg != nil && cfg.Options.DebugLSP {
+	if c.cfg != nil && c.cfg.Options.DebugLSP {
 		slog.Debug("Waiting for LSP server to be ready...")
 	}
 
@@ -215,7 +246,7 @@ func (c *Client) WaitForServerReady(ctx context.Context) error {
 		case <-ticker.C:
 			// Check if client is running
 			if !c.client.IsRunning() {
-				if cfg != nil && cfg.Options.DebugLSP {
+				if c.cfg != nil && c.cfg.Options.DebugLSP {
 					slog.Debug("LSP server not ready yet", "server", c.name)
 				}
 				continue
@@ -223,7 +254,7 @@ func (c *Client) WaitForServerReady(ctx context.Context) error {
 
 			// Server is ready
 			c.SetServerState(StateReady)
-			if cfg != nil && cfg.Options.DebugLSP {
+			if c.cfg != nil && c.cfg.Options.DebugLSP {
 				slog.Debug("LSP server is ready")
 			}
 			return nil
@@ -328,8 +359,7 @@ func (c *Client) IsFileOpen(filepath string) bool {
 
 // CloseAllFiles closes all currently open files.
 func (c *Client) CloseAllFiles(ctx context.Context) {
-	cfg := config.Get()
-	debugLSP := cfg != nil && cfg.Options.DebugLSP
+	debugLSP := c.cfg != nil && c.cfg.Options.DebugLSP
 	for uri := range c.openFiles.Seq2() {
 		if debugLSP {
 			slog.Debug("Closing file", "file", uri)

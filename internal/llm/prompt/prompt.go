@@ -8,7 +8,6 @@ import (
 
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
-	"github.com/charmbracelet/crush/internal/env"
 	"github.com/charmbracelet/crush/internal/home"
 )
 
@@ -22,15 +21,15 @@ const (
 	PromptDefault    PromptID = "default"
 )
 
-func GetPrompt(promptID PromptID, provider string, contextPaths ...string) string {
+func GetPrompt(cfg *config.Config, promptID PromptID, provider string, contextPaths ...string) string {
 	basePrompt := ""
 	switch promptID {
 	case PromptCoder:
-		basePrompt = CoderPrompt(provider, contextPaths...)
+		basePrompt = CoderPrompt(cfg, provider, contextPaths...)
 	case PromptTitle:
 		basePrompt = TitlePrompt()
 	case PromptTask:
-		basePrompt = TaskPrompt()
+		basePrompt = TaskPrompt(cfg)
 	case PromptSummarizer:
 		basePrompt = SummarizerPrompt()
 	default:
@@ -49,7 +48,7 @@ func expandPath(path string) string {
 
 	// Handle environment variable expansion using the same pattern as config
 	if strings.HasPrefix(path, "$") {
-		resolver := config.NewEnvironmentVariableResolver(env.New())
+		resolver := config.NewEnvironmentVariableResolver(os.Environ())
 		if expanded, err := resolver.ResolveValue(path); err == nil {
 			path = expanded
 		}

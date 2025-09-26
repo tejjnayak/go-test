@@ -9,14 +9,12 @@ import (
 	"sync"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea/v2"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/db"
 	"github.com/charmbracelet/crush/internal/format"
 	"github.com/charmbracelet/crush/internal/history"
 	"github.com/charmbracelet/crush/internal/llm/agent"
-	"github.com/charmbracelet/crush/internal/log"
 	"github.com/charmbracelet/crush/internal/pubsub"
 
 	"github.com/charmbracelet/crush/internal/lsp"
@@ -35,12 +33,14 @@ type App struct {
 
 	LSPClients *csync.Map[string, *lsp.Client]
 
+	lspStates *csync.Map[string, LSPClientInfo]
+	lspBroker *pubsub.Broker[LSPEvent]
+
 	config *config.Config
 
 	serviceEventsWG *sync.WaitGroup
 	eventsCtx       context.Context
-	events          chan tea.Msg
-	tuiWG           *sync.WaitGroup
+	events          chan any
 
 	// global context and cleanup functions
 	globalCtx    context.Context
@@ -49,6 +49,9 @@ type App struct {
 
 // New initializes a new applcation instance.
 func New(ctx context.Context, conn *sql.DB, cfg *config.Config) (*App, error) {
+	// Attach config to context for use in services.
+	ctx = config.WithContext(ctx, cfg)
+
 	q := db.New(conn)
 	sessions := session.NewService(q)
 	messages := message.NewService(q)
@@ -65,14 +68,15 @@ func New(ctx context.Context, conn *sql.DB, cfg *config.Config) (*App, error) {
 		History:     files,
 		Permissions: permission.NewPermissionService(cfg.WorkingDir(), skipPermissionsRequests, allowedTools),
 		LSPClients:  csync.NewMap[string, *lsp.Client](),
+		lspStates:   csync.NewMap[string, LSPClientInfo](),
+		lspBroker:   pubsub.NewBroker[LSPEvent](),
 
 		globalCtx: ctx,
 
 		config: cfg,
 
-		events:          make(chan tea.Msg, 100),
+		events:          make(chan any, 100),
 		serviceEventsWG: &sync.WaitGroup{},
-		tuiWG:           &sync.WaitGroup{},
 	}
 
 	app.setupEvents()
@@ -92,6 +96,11 @@ func New(ctx context.Context, conn *sql.DB, cfg *config.Config) (*App, error) {
 		slog.Warn("No agent configuration found")
 	}
 	return app, nil
+}
+
+// Events returns the application's event channel.
+func (app *App) Events() <-chan any {
+	return app.events
 }
 
 // Config returns the application configuration.
@@ -215,7 +224,7 @@ func (app *App) setupEvents() {
 	setupSubscriber(ctx, app.serviceEventsWG, "permissions-notifications", app.Permissions.SubscribeNotifications, app.events)
 	setupSubscriber(ctx, app.serviceEventsWG, "history", app.History.Subscribe, app.events)
 	setupSubscriber(ctx, app.serviceEventsWG, "mcp", agent.SubscribeMCPEvents, app.events)
-	setupSubscriber(ctx, app.serviceEventsWG, "lsp", SubscribeLSPEvents, app.events)
+	setupSubscriber(ctx, app.serviceEventsWG, "lsp", app.SubscribeLSPEvents, app.events)
 	cleanupFunc := func() error {
 		cancel()
 		app.serviceEventsWG.Wait()
@@ -229,7 +238,7 @@ func setupSubscriber[T any](
 	wg *sync.WaitGroup,
 	name string,
 	subscriber func(context.Context) <-chan pubsub.Event[T],
-	outputCh chan<- tea.Msg,
+	outputCh chan<- any,
 ) {
 	wg.Go(func() {
 		subCh := subscriber(ctx)
@@ -240,9 +249,8 @@ func setupSubscriber[T any](
 					slog.Debug("subscription channel closed", "name", name)
 					return
 				}
-				var msg tea.Msg = event
 				select {
-				case outputCh <- msg:
+				case outputCh <- event:
 				case <-time.After(2 * time.Second):
 					slog.Warn("message dropped due to slow consumer", "name", name)
 				case <-ctx.Done():
@@ -265,6 +273,7 @@ func (app *App) InitCoderAgent() error {
 	var err error
 	app.CoderAgent, err = agent.NewAgent(
 		app.globalCtx,
+		app.config,
 		coderAgentCfg,
 		app.Permissions,
 		app.Sessions,
@@ -282,38 +291,6 @@ func (app *App) InitCoderAgent() error {
 
 	setupSubscriber(app.eventsCtx, app.serviceEventsWG, "coderAgent", app.CoderAgent.Subscribe, app.events)
 	return nil
-}
-
-// Subscribe sends events to the TUI as tea.Msgs.
-func (app *App) Subscribe(program *tea.Program) {
-	defer log.RecoverPanic("app.Subscribe", func() {
-		slog.Info("TUI subscription panic: attempting graceful shutdown")
-		program.Quit()
-	})
-
-	app.tuiWG.Add(1)
-	tuiCtx, tuiCancel := context.WithCancel(app.globalCtx)
-	app.cleanupFuncs = append(app.cleanupFuncs, func() error {
-		slog.Debug("Cancelling TUI message handler")
-		tuiCancel()
-		app.tuiWG.Wait()
-		return nil
-	})
-	defer app.tuiWG.Done()
-
-	for {
-		select {
-		case <-tuiCtx.Done():
-			slog.Debug("TUI message handler shutting down")
-			return
-		case msg, ok := <-app.events:
-			if !ok {
-				slog.Debug("TUI message channel closed")
-				return
-			}
-			program.Send(msg)
-		}
-	}
 }
 
 // Shutdown performs a graceful shutdown of the application.
