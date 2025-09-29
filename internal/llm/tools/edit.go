@@ -119,9 +119,9 @@ func createNewFile(edit editContext, filePath, content string, call ai.ToolCall)
 		return ai.ToolResponse{}, fmt.Errorf("failed to create parent directories: %w", err)
 	}
 
-	sessionID, messageID := GetContextValues(edit.ctx)
-	if sessionID == "" || messageID == "" {
-		return ai.ToolResponse{}, fmt.Errorf("session ID and message ID are required for creating a new file")
+	sessionID := GetSessionFromContext(edit.ctx)
+	if sessionID == "" {
+		return ai.ToolResponse{}, fmt.Errorf("session ID is required for creating a new file")
 	}
 
 	_, additions, removals := diff.GenerateDiff(
@@ -238,10 +238,10 @@ func deleteContent(edit editContext, filePath, oldString string, replaceAll bool
 		deletionCount = 1
 	}
 
-	sessionID, messageID := GetContextValues(edit.ctx)
+	sessionID := GetSessionFromContext(edit.ctx)
 
-	if sessionID == "" || messageID == "" {
-		return ai.ToolResponse{}, fmt.Errorf("session ID and message ID are required for creating a new file")
+	if sessionID == "" {
+		return ai.ToolResponse{}, fmt.Errorf("session ID is required for creating a new file")
 	}
 
 	_, additions, removals := diff.GenerateDiff(
@@ -374,10 +374,10 @@ func replaceContent(edit editContext, filePath, oldString, newString string, rep
 	if oldContent == newContent {
 		return ai.NewTextErrorResponse("new content is the same as old content. No changes made."), nil
 	}
-	sessionID, messageID := GetContextValues(edit.ctx)
+	sessionID := GetSessionFromContext(edit.ctx)
 
-	if sessionID == "" || messageID == "" {
-		return ai.ToolResponse{}, fmt.Errorf("session ID and message ID are required for creating a new file")
+	if sessionID == "" {
+		return ai.ToolResponse{}, fmt.Errorf("session ID is required for creating a new file")
 	}
 	_, additions, removals := diff.GenerateDiff(
 		oldContent,

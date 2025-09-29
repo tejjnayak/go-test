@@ -77,9 +77,9 @@ func NewLsTool(permissions permission.Service, workingDir string) ai.AgentTool {
 			relPath, err := filepath.Rel(absWorkingDir, absSearchPath)
 			if err != nil || strings.HasPrefix(relPath, "..") {
 				// Directory is outside working directory, request permission
-				sessionID, messageID := GetContextValues(ctx)
-				if sessionID == "" || messageID == "" {
-					return ai.ToolResponse{}, fmt.Errorf("session ID and message ID are required for accessing directories outside working directory")
+				sessionID := GetSessionFromContext(ctx)
+				if sessionID == "" {
+					return ai.ToolResponse{}, fmt.Errorf("session ID is required for accessing directories outside working directory")
 				}
 
 				granted := permissions.Request(

@@ -207,9 +207,9 @@ func NewBashTool(permissions permission.Service, workingDir string, attribution 
 				}
 			}
 
-			sessionID, messageID := GetContextValues(ctx)
-			if sessionID == "" || messageID == "" {
-				return ai.ToolResponse{}, fmt.Errorf("session ID and message ID are required for executing shell command")
+			sessionID := GetSessionFromContext(ctx)
+			if sessionID == "" {
+				return ai.ToolResponse{}, fmt.Errorf("session ID is required for executing shell command")
 			}
 			if !isSafeReadOnly {
 				shell := shell.GetPersistentShell(workingDir)

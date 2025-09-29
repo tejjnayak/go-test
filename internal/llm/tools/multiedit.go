@@ -148,9 +148,9 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams, call
 	}
 
 	// Get session and message IDs
-	sessionID, messageID := GetContextValues(edit.ctx)
-	if sessionID == "" || messageID == "" {
-		return ai.ToolResponse{}, fmt.Errorf("session ID and message ID are required for creating a new file")
+	sessionID := GetSessionFromContext(edit.ctx)
+	if sessionID == "" {
+		return ai.ToolResponse{}, fmt.Errorf("session ID is required for creating a new file")
 	}
 
 	// Check permissions
@@ -258,9 +258,9 @@ func processMultiEditExistingFile(edit editContext, params MultiEditParams, call
 	}
 
 	// Get session and message IDs
-	sessionID, messageID := GetContextValues(edit.ctx)
-	if sessionID == "" || messageID == "" {
-		return ai.ToolResponse{}, fmt.Errorf("session ID and message ID are required for editing file")
+	sessionID := GetSessionFromContext(edit.ctx)
+	if sessionID == "" {
+		return ai.ToolResponse{}, fmt.Errorf("session ID is required for editing file")
 	}
 
 	// Generate diff and check permissions

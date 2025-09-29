@@ -173,9 +173,9 @@ func getOrRenewClient(ctx context.Context, name string) (*client.Client, error) 
 }
 
 func (b *McpTool) Run(ctx context.Context, params ai.ToolCall) (ai.ToolResponse, error) {
-	sessionID, messageID := GetContextValues(ctx)
-	if sessionID == "" || messageID == "" {
-		return ai.ToolResponse{}, fmt.Errorf("session ID and message ID are required for creating a new file")
+	sessionID := GetSessionFromContext(ctx)
+	if sessionID == "" {
+		return ai.ToolResponse{}, fmt.Errorf("session ID is required for creating a new file")
 	}
 	permissionDescription := fmt.Sprintf("execute %s with the following parameters:", b.Info().Name)
 	p := b.permissions.Request(

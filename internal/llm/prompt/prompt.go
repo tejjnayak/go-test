@@ -1,56 +1,116 @@
 package prompt
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"sync"
+	"text/template"
+	"time"
 
 	"github.com/charmbracelet/crush/internal/config"
-	"github.com/charmbracelet/crush/internal/csync"
-	"github.com/charmbracelet/crush/internal/env"
 	"github.com/charmbracelet/crush/internal/home"
 )
 
-type PromptID string
-
-const (
-	PromptCoder      PromptID = "coder"
-	PromptTitle      PromptID = "title"
-	PromptTask       PromptID = "task"
-	PromptSummarizer PromptID = "summarizer"
-	PromptDefault    PromptID = "default"
-)
-
-func GetPrompt(promptID PromptID, provider string, contextPaths ...string) string {
-	basePrompt := ""
-	switch promptID {
-	case PromptCoder:
-		basePrompt = CoderPrompt(provider, contextPaths...)
-	case PromptTitle:
-		basePrompt = TitlePrompt()
-	case PromptTask:
-		basePrompt = TaskPrompt()
-	case PromptSummarizer:
-		basePrompt = SummarizerPrompt()
-	default:
-		basePrompt = "You are a helpful assistant"
-	}
-	return basePrompt
+// Prompt represents a template-based prompt generator.
+type Prompt struct {
+	name     string
+	template string
 }
 
-func getContextFromPaths(workingDir string, contextPaths []string) string {
-	return processContextPaths(workingDir, contextPaths)
+type PromptDat struct {
+	Provider   string
+	Model      string
+	Config     config.Config
+	WorkingDir string
+	IsGitRepo  bool
+	Platform   string
+	Date       string
+}
+
+type ContextFile struct {
+	Path    string
+	Content string
+}
+
+func NewPrompt(name, promptTemplate string) (*Prompt, error) {
+	return &Prompt{
+		name:     name,
+		template: promptTemplate,
+	}, nil
+}
+
+func (p *Prompt) Build(provider, model string, cfg config.Config) (string, error) {
+	t, err := template.New(p.name).Funcs(p.funcMap(cfg)).Parse(p.template)
+	if err != nil {
+		return "", fmt.Errorf("parsing template: %w", err)
+	}
+	var sb strings.Builder
+	if err := t.Execute(&sb, promptData(provider, model, cfg)); err != nil {
+		return "", fmt.Errorf("executing template: %w", err)
+	}
+
+	return sb.String(), nil
+}
+
+func (p *Prompt) funcMap(cfg config.Config) template.FuncMap {
+	return template.FuncMap{
+		"contextFiles": func(path string) []ContextFile {
+			path = expandPath(path, cfg)
+			return processContextPath(path, cfg)
+		},
+	}
+}
+
+func processFile(filePath string) *ContextFile {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil
+	}
+	return &ContextFile{
+		Path:    filePath,
+		Content: string(content),
+	}
+}
+
+func processContextPath(p string, cfg config.Config) []ContextFile {
+	var contexts []ContextFile
+	fullPath := p
+	if !filepath.IsAbs(p) {
+		fullPath = filepath.Join(cfg.WorkingDir(), p)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return contexts
+	}
+	if info.IsDir() {
+		filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() {
+				if result := processFile(path); result != nil {
+					contexts = append(contexts, *result)
+				}
+			}
+			return nil
+		})
+	} else {
+		result := processFile(fullPath)
+		if result != nil {
+			contexts = append(contexts, *result)
+		}
+	}
+	return contexts
 }
 
 // expandPath expands ~ and environment variables in file paths
-func expandPath(path string) string {
+func expandPath(path string, cfg config.Config) string {
 	path = home.Long(path)
-
 	// Handle environment variable expansion using the same pattern as config
 	if strings.HasPrefix(path, "$") {
-		resolver := config.NewEnvironmentVariableResolver(env.New())
-		if expanded, err := resolver.ResolveValue(path); err == nil {
+		if expanded, err := cfg.Resolver().ResolveValue(path); err == nil {
 			path = expanded
 		}
 	}
@@ -58,86 +118,23 @@ func expandPath(path string) string {
 	return path
 }
 
-func processContextPaths(workDir string, paths []string) string {
-	var (
-		wg       sync.WaitGroup
-		resultCh = make(chan string)
-	)
-
-	// Track processed files to avoid duplicates
-	processedFiles := csync.NewMap[string, bool]()
-
-	for _, path := range paths {
-		wg.Add(1)
-		go func(p string) {
-			defer wg.Done()
-
-			// Expand ~ and environment variables before processing
-			p = expandPath(p)
-
-			// Use absolute path if provided, otherwise join with workDir
-			fullPath := p
-			if !filepath.IsAbs(p) {
-				fullPath = filepath.Join(workDir, p)
-			}
-
-			// Check if the path is a directory using os.Stat
-			info, err := os.Stat(fullPath)
-			if err != nil {
-				return // Skip if path doesn't exist or can't be accessed
-			}
-
-			if info.IsDir() {
-				filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
-					if err != nil {
-						return err
-					}
-					if !d.IsDir() {
-						// Check if we've already processed this file (case-insensitive)
-						lowerPath := strings.ToLower(path)
-
-						if alreadyProcessed, _ := processedFiles.Get(lowerPath); !alreadyProcessed {
-							processedFiles.Set(lowerPath, true)
-							if result := processFile(path); result != "" {
-								resultCh <- result
-							}
-						}
-					}
-					return nil
-				})
-			} else {
-				// It's a file, process it directly
-				// Check if we've already processed this file (case-insensitive)
-				lowerPath := strings.ToLower(fullPath)
-
-				if alreadyProcessed, _ := processedFiles.Get(lowerPath); !alreadyProcessed {
-					processedFiles.Set(lowerPath, true)
-					result := processFile(fullPath)
-					if result != "" {
-						resultCh <- result
-					}
-				}
-			}
-		}(path)
+func promptData(provider, model string, cfg config.Config) PromptDat {
+	return PromptDat{
+		Provider:   provider,
+		Model:      model,
+		Config:     cfg,
+		WorkingDir: cfg.WorkingDir(),
+		IsGitRepo:  isGitRepo(cfg.WorkingDir()),
+		Platform:   runtime.GOOS,
+		Date:       time.Now().Format("1/2/2006"),
 	}
-
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
-
-	results := make([]string, 0)
-	for result := range resultCh {
-		results = append(results, result)
-	}
-
-	return strings.Join(results, "\n")
 }
 
-func processFile(filePath string) string {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return ""
-	}
-	return "# From:" + filePath + "\n" + string(content)
+func isGitRepo(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
+}
+
+func (p *Prompt) Name() string {
+	return p.name
 }

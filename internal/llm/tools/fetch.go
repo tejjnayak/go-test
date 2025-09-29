@@ -66,9 +66,9 @@ func NewFetchTool(permissions permission.Service, workingDir string) ai.AgentToo
 				return ai.NewTextErrorResponse("URL must start with http:// or https://"), nil
 			}
 
-			sessionID, messageID := GetContextValues(ctx)
-			if sessionID == "" || messageID == "" {
-				return ai.ToolResponse{}, fmt.Errorf("session ID and message ID are required for creating a new file")
+			sessionID := GetSessionFromContext(ctx)
+			if sessionID == "" {
+				return ai.ToolResponse{}, fmt.Errorf("session ID is required for creating a new file")
 			}
 
 			p := permissions.Request(

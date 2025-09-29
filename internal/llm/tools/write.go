@@ -101,9 +101,9 @@ func NewWriteTool(lspClients *csync.Map[string, *lsp.Client], permissions permis
 				}
 			}
 
-			sessionID, messageID := GetContextValues(ctx)
-			if sessionID == "" || messageID == "" {
-				return ai.ToolResponse{}, fmt.Errorf("session_id and message_id are required")
+			sessionID := GetSessionFromContext(ctx)
+			if sessionID == "" {
+				return ai.ToolResponse{}, fmt.Errorf("session_id is required")
 			}
 
 			diff, additions, removals := diff.GenerateDiff(

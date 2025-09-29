@@ -65,9 +65,9 @@ func NewDownloadTool(permissions permission.Service, workingDir string) ai.Agent
 				filePath = filepath.Join(workingDir, params.FilePath)
 			}
 
-			sessionID, messageID := GetContextValues(ctx)
-			if sessionID == "" || messageID == "" {
-				return ai.ToolResponse{}, fmt.Errorf("session ID and message ID are required for downloading files")
+			sessionID := GetSessionFromContext(ctx)
+			if sessionID == "" {
+				return ai.ToolResponse{}, fmt.Errorf("session ID is required for downloading files")
 			}
 
 			p := permissions.Request(

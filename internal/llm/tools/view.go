@@ -79,9 +79,9 @@ func NewViewTool(lspClients *csync.Map[string, *lsp.Client], permissions permiss
 			relPath, err := filepath.Rel(absWorkingDir, absFilePath)
 			if err != nil || strings.HasPrefix(relPath, "..") {
 				// File is outside working directory, request permission
-				sessionID, messageID := GetContextValues(ctx)
-				if sessionID == "" || messageID == "" {
-					return ai.ToolResponse{}, fmt.Errorf("session ID and message ID are required for accessing files outside working directory")
+				sessionID := GetSessionFromContext(ctx)
+				if sessionID == "" {
+					return ai.ToolResponse{}, fmt.Errorf("session ID is required for accessing files outside working directory")
 				}
 
 				granted := permissions.Request(
