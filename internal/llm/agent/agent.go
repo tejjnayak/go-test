@@ -26,7 +26,7 @@ import (
 	"github.com/charmbracelet/crush/internal/shell"
 )
 
-const streamChunkTimeout = 80 * time.Second
+const streamChunkTimeout = 2 * time.Minute
 
 type AgentEventType string
 
@@ -555,6 +555,9 @@ func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msg
 	ctx = context.WithValue(ctx, tools.MessageIDContextKey, assistantMsg.ID)
 
 	// Process each event in the stream.
+	timer := time.NewTimer(streamChunkTimeout)
+	defer timer.Stop()
+
 loop:
 	for {
 		select {
@@ -562,6 +565,9 @@ loop:
 			if !ok {
 				break loop
 			}
+			// Reset the timeout timer since we received a chunk
+			timer.Reset(streamChunkTimeout)
+
 			if processErr := a.processEvent(ctx, sessionID, &assistantMsg, event); processErr != nil {
 				if errors.Is(processErr, context.Canceled) {
 					a.finishMessage(context.Background(), &assistantMsg, message.FinishReasonCanceled, "Request cancelled", "")
@@ -570,9 +576,9 @@ loop:
 				}
 				return assistantMsg, nil, processErr
 			}
-		case <-time.After(streamChunkTimeout):
+		case <-timer.C:
 			a.finishMessage(ctx, &assistantMsg, message.FinishReasonError, "Stream timeout", "No chunk received within timeout")
-			return assistantMsg, nil, fmt.Errorf("stream chunk timeout")
+			return assistantMsg, nil, ErrStreamTimeout
 		case <-ctx.Done():
 			a.finishMessage(context.Background(), &assistantMsg, message.FinishReasonCanceled, "Request cancelled", "")
 			return assistantMsg, nil, ctx.Err()
