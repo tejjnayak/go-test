@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/charmbracelet/bubbles/v2/help"
@@ -455,7 +456,8 @@ func (p *chatPage) View() string {
 	var chatView string
 	t := styles.CurrentTheme()
 
-	if p.session.ID == "" {
+	if !p.hasActiveSession {
+	// if p.session.ID == "" {
 		splashView := p.splash.View()
 		// Full screen during onboarding or project initialization
 		if p.splashFullScreen {
@@ -635,7 +637,8 @@ func (p *chatPage) SetSize(width, height int) tea.Cmd {
 	p.height = height
 	var cmds []tea.Cmd
 
-	if p.session.ID == "" {
+	if !p.hasActiveSession {
+	// if p.session.ID == "" {
 		if p.splashFullScreen {
 			cmds = append(cmds, p.splash.SetSize(width, height))
 		} else {
@@ -661,11 +664,16 @@ func (p *chatPage) SetSize(width, height int) tea.Cmd {
 }
 
 func (p *chatPage) newSession() tea.Cmd {
-	if p.session.ID == "" {
+	if !p.hasActiveSession {
+	// if p.session.ID == "" {
 		return nil
 	}
 
-	p.session = session.Session{}
+	if _, err := p.cctx.ResolveCurrentSession(); err != nil {
+		return util.ReportError(fmt.Errorf("failed to initialise new session: %w", err))
+	}
+	p.hasActiveSession = true
+	// p.session = session.Session{}
 	p.focusedPane = PanelTypeEditor
 	p.editor.Focus()
 	p.chat.Blur()
