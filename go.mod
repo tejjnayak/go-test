@@ -3,7 +3,7 @@ module github.com/charmbracelet/crush
 go 1.25.0
 
 require (
-    github.com/tejjnayak/go-example-private/ v1.0.0
+    github.com/tejjnayak/go-example-private v1.0.0
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
 	github.com/MakeNowJust/heredoc v1.0.0
 	github.com/PuerkitoBio/goquery v1.10.3
